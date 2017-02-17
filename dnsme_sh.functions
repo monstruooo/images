@@ -1,0 +1,159 @@
+#!/bin/bash 
+
+dnsme_autorefresh=3
+dnsme_autoupdate=ON
+
+function dnsme_mount () {
+	dnsme set mount $*
+}
+
+function dnsme_autoupdate () {
+	 [[ x$dnsme_autoupdate == xON ]] && return 0 || return 1
+}
+
+function dnsme_url () {
+echo https://cp.dnsmadeeasy.com/dns/managed/$dnsme_dmn_id
+}
+
+function dnsme_set() {
+case $1 in
+	shell|mount)
+	dnsme_alias="mk bye ls cat pwd help dme cd chdir url updatedb"
+	if [[ -n $dnsme_ps1_saved ]] ; then
+		PS1="$dnsme_ps1_saved"
+		unset dnsme_ps1_saved
+		unalias $dnsme_alias 2>/dev/zero
+		eval "$dnsme_alias_saved"
+		echo dnsme $1 OFF
+	else
+		[[ x$2 == x[Oo][Ff][Ff] ]] && { echo dnsme $1 OFF ; return ; }
+		dnsme_ps1_saved="$PS1"
+		PS1='$(dnsme pwd) ]$ '
+		grep_str=$(echo $dnsme_alias | sed -r 's/ /|/g') # ls|cat|pwd...
+		dnsme_alias_saved=$(alias | egrep " (${grep_str})=")
+		unalias $dnsme_alias 2>/dev/zero
+		for alias in $dnsme_alias ; do
+			alias $alias="dnsme $alias "
+		done
+		alias dme=dnsme
+		alias chdir='dnsme cd'
+		alias url='dnsme url'
+		echo dnsme $1 ON
+	fi
+	;;
+	autoupdate)
+	[[ x$dnsme_autoupdate == xON ]] && dnsme_autoupdate=OFF || dnsme_autoupdate=ON
+	echo DNSME autoupdate now set to $dnsme_autoupdate
+	;;
+esac
+} # end function dnsme_shell
+
+function dnsme_cat () {
+if [[ -z $dnsme_dmn ]] ; then
+	if [[ -n $1 ]] ; then
+		for dmn in $* ; do
+			dnsme_get $dmn
+		done
+	else
+		dnsme_get |
+		jq -r '.data | sort_by("name") | { data: . }'
+	fi	
+else
+	if [[ -z $1 ]] ; then
+		dnsme_get $dnsme_dmn
+	else
+debug="------------------"${FUNCNAME[0]}
+		dnsme_get $dnsme_dmn |
+		jq '.data[] | select(.id=='$1')'
+	fi
+fi
+} # end function dnsme_cat
+
+function dnsme_ls () {
+if [[ -z $dnsme_dmn ]] ; then
+	if [[ -n $1 ]] ; then
+		musing='Disabled it temporarily using this cool trick.
+				Its probably better to just print records'
+		[[ "" ]] &&
+		dnsme get | 
+		jq -r ' .data[] | select(.name=="'$1'" or (.id|tostring)=="'$1'")' |
+		json_to_ini
+
+		dnsme get $1 | dnsme_record_to_cols
+	else
+		dnsme get |
+		jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + "\t" + .name' |
+		xargs -L 1 printf '%-11s%s\n' 
+	fi
+elif [[ -n $1 ]] ; then
+	dnsme get $dnsme_dmn | jq ".data[]|select(.id==$1)" | json_to_ini
+else
+	dnsme get $dnsme_dmn | dnsme_record_to_cols
+fi
+} #end function dnsme_ls
+
+function dnsme_mk () {
+if [[ -z $dnsme_dmn ]] ; then 
+	[[ -n $1 ]] && dnsme_push '{ domain: '"$1"'}'
+else
+	name=${1/@/}
+	shift
+	type=$1
+	shift
+	value="$*"
+	dnsme_push domain=$dnsme_dmn name=$name type=$type value="$value"
+fi
+} # end function dnsme_mk
+
+function dnsme_bye () {
+if [[ -z $dnsme_dmn ]] ; then
+	echo Run manually dnsme rm domain_id=${dme_dmn_id:-None}
+else
+	if [[ -n $1 ]] ; then
+		for id in $* ; do
+			dnsme_autoupdate=OFF dnsme rm domain=$dnsme_dmn id=$id
+		done
+		dnsme_autoupdate && dnsme updatedb
+	fi
+fi
+
+} # end function dnsme_delete
+
+function dnsme_pwd () {
+echo -n dnsme://
+if [[ -n $dnsme_dmn ]] ; then
+	echo -n ${dnsme_dmn}:${dnsme_dmn_id}
+	# [[ -n $dnsme_rcrd ]] && echo -n $dnsme_rcrd
+fi
+echo 
+} # end function dnsme_pwd
+
+function dnsme_cd () {
+local path=$( echo $1 | sed -r 's,(dnsme:/)?/,,')
+if [[ -z $path ]] ; then unset dnsme_dmn dnsme_dmn_id
+else 
+	if [[ -n $path ]] ; then
+		local x
+		x=$(dnsme_domain_id $1) || { echo No such domain $path 1>&1 ; return 1; } 
+		dnsme_dmn_id=$x 
+		dnsme_dmn=$path
+	else
+		unset dnsme_dmn dnsme_dmn_id
+	fi
+fi
+} # end function dnsme_cd
+
+function dnsme () {
+local action=$1
+shift
+dnsme_${action} "$@"
+} # end function dnsme
+	
+function dnsme_updatedb () {
+    local dmn
+	[[ -n $dnsme_dmn ]] && dmn=$dnsme_dmn
+	local msg="Updating DNSME cache"
+    [[ -n $1 ]] && { dmn=$1 ; msg="$msg & Domain $dmn cache" ; }
+	echo $msg...
+    dnsme_autorefresh=0 dnsme_get $dmn > /dev/zero
+} # end

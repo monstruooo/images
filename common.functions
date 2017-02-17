@@ -1,0 +1,123 @@
+#!/bin/bash
+
+function read_nl () { 
+readme='add new line to read -n 1 unless Enter pressed (which adds new line)'
+[[ -z $REPLY ]] || echo
+}
+
+function prn_col () {
+        local next
+        for next in $* ; do
+                echo $next
+        done
+} 
+
+function json_to_ini () {
+
+local key keys json="$1"
+if [[ -z $json ]] ; then
+	json=$(/bin/cat /dev/stdin)
+fi
+keys=$(echo "$json" | jq -r 'keys | .[]');
+for key in $keys ; do
+    value=$(get_key $key "$json") && { printf %-22s $key ; eval echo $value ; }
+done | sort -V
+
+}
+
+function json_to_vars () {
+local keys json="$1"
+keys=$(echo "$json" | jq -r 'keys | .[]');
+for key in $keys ; do
+    value=$(get_key $key "$json")
+	key=$value
+done
+
+}
+
+function arr2json () {
+readme="
+    Converts bash array to json.
+    Expects array name as the first argument
+    Array should be passed as a list of items separated by newlines
+    Array argument should be quoted"
+local arrname=$1 array
+shift
+array="$@"
+jq -n --arg array "$array" {${arrname}': $array  | split("\n")}'
+}
+
+function is_json () {
+if [[ -f "$1" ]] ; then
+	readme='jq returns 0 on empty file'
+	egrep -q -m 1 '{' "$1" >/dev/zero 2>&1 || { code=$? ; return $code ; }
+	/bin/cat "$1" | jq -e . >/dev/zero 2>&1 ; code=$? ; return $code ;
+else
+	echo "$1" | egrep -q -m 1 '{'  >/dev/zero 2>&1 || { code=$? ; return $code ; }
+	jq -n -e "$1" >/dev/zero 2>&1  ; code=$? ; return $code ;
+fi
+}
+
+function jqres () {
+args_to_vars json "$@"
+jq -n "$json | .code= (.code|tonumber) | { res: . }"
+}
+
+function has_key () {
+local key="$1" json="$2"
+if [[ -f "$json" ]] ; then
+	/bin/cat "$json" | jq  -e '. | has("'$key'")' > /dev/zero
+else
+	jq -n -e "$json"' | . | has("'$key'")' > /dev/zero
+fi
+} 
+
+function args_to_vars () {
+local arg key value j 
+json=0 
+if [[ x$1 == xjson ]] ; then
+	json=1
+	shift
+fi
+keys=
+for arg in "$@" ; do
+	key=${arg%%=*}
+	keys="$key $keys"
+	value=${arg#*=} 
+	for key in $key ; do
+		export $key="$value"
+	done
+done
+
+[[ $json == 0 ]] && return
+json='{}'
+for arg in "$@" ; do
+	key=${arg%%=*}
+	value=${arg#*=}
+	if echo $value | egrep -q '^[0-9]+$' ; then
+		json=$( jq -n "$json | .$key=$value")
+	else
+		json=$( jq -n "$json | .$key=\"$value\"")
+	fi
+done  
+} # end function
+
+
+function get_key () {
+local key="$1" json="$2"
+jq -n -e "$json | .${key}"
+} 
+
+function json_dump_py () {
+local py_cmd='import sys,json;
+print (json.load(sys.stdin) , indent 3)'
+
+if [[ -n "$*" ]] ; then
+    echo "$*" | python -c "$py_cmd"
+else
+    while read line ; do
+        echo $line
+    done | python -c "$py_cmd"
+fi
+} # end function
+

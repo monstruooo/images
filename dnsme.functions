@@ -1,0 +1,217 @@
+#!/bin/bash
+
+DNSME_TMP_DIR=/dev/shm/$USER/tmp/dnsme
+mkdir -p $DNSME_TMP_DIR
+
+function dnsme_cfg () {
+[[ x$1 == set ]] && unset dnsme_api_key dnsme_secret_key
+[[ -z $dnsme_api_key ]] && read -p 'API Key: ' dnsme_api_key
+[[ -z $dnsme_secret_key ]] && read -s -p 'API Secret Key: ' dnsme_secret_key
+} # end function dnsme_configure
+
+function dnsme_record_to_cols () {
+while read -r line ; do
+    echo "$line"
+done | $jq -c -r '.data | sort_by(.type) | .[] |
+"\(.id) \( if .name == "" then "@" else .name end) \(.type) \(.ttl)  \(.value)"' |
+xargs printf '%-11s %-44s %-11s %-8s %s\n'
+} # end function
+
+function dnsme_api () {
+
+request_date=$(
+{ echo -n "$(date -u -R) " ; date -u +%Z ; } | cut -s -d' ' -f1-5,7
+)
+
+hmac=$(echo -n "$request_date" | openssl sha1 -hmac "$dnsme_secret_key" | sed 's/.*= //g')
+
+# http headers
+api_key_H="x-dnsme-apiKey:$dnsme_api_key"
+hmac_H="x-dnsme-hmac:$hmac"
+req_date_H="x-dnsme-requestDate:$request_date"
+content_type_H="content-type:application/json"
+accept_type_H="accept:application/json"
+local api_uri=$1
+shift
+api_uri=${api_uri#*/dns/managed/} # backward compatibility for calls that use full url instead of uri
+
+local res=$DNSME_TMP_DIR/res
+curl -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" https://api.dnsmadeeasy.com/V2.0/dns/managed/$api_uri "$@" >$res 2>&1 ||
+{ code=$? ; echo Curl failed | egrep --color '.*' ; /bin/cat $res ; return $code ; }
+
+info='If file exists or empty'
+if [[ -e $res && ! -s $res ]] ; then
+	jq -n '{ res: { code: 0, message: "No Output. No curl errors either" , source: "Oskar" } }'
+	return 0
+fi
+if ! is_json $res ; then
+    printf '\n %s \n\n' "DNSME Request failed" | egrep -C 3 --color '.*' 1>&2
+    grep -q '<html>' $res && /bin/cat $res | lynx -dump --stdin 1>&2 || /bin/cat $res 1>&2
+    return 1
+fi
+	
+if has_key error $res ; then
+	/bin/cat $res | jq -e ' . | .error | { error: . }'  1>&2  # reconstructing error can save you a lot of time troubleshooting
+else
+	/bin/cat $res | jq . 
+fi
+} # end dnsme_api
+
+function dnsme_get () {
+local readme='
+	If no argument is provided the function exits after pulling the list of domains
+' # end readme=
+
+local cache=$DNSME_TMP_DIR/all.domains
+if ! is_json $cache || find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ; then
+	mkdir -p $( dirname $cache)
+	# echo Updating DNSME domain cache 1>&2
+	dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/ > $cache
+fi
+
+if [[ -z $1 ]] ; then
+	/bin/cat $cache | jq .
+	return
+fi
+
+local dmn_cache=$DNSME_TMP_DIR/$1
+readme='if exists and json and not older than autorefresh'
+if is_json $dmn_cache  && find $dmn_cache -mmin -${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ; then
+	/bin/cat $dmn_cache | jq .
+	return
+fi
+
+local id
+id=$(/bin/cat $cache | jq -r -e '.data[] | select(.name=="'$1'" or (.id|tostring)=="'$1'") | .id') ||
+	{ jqres code=1 src=${FUNCNAME[0]} msg="Domain $1 id not found" 1>&2 ; return 1 ; }
+# id=$(dnsme_domain_id $1) || { jq -n '{ res: { code: 1, source: "'${FUNCNAME[0]}'", msg: "Domain "'$1'" id not found"} }' ; return 1 ; }
+# echo Updating domain $1 cache 1>&2
+dnsme_api $id/records  > $dmn_cache
+/bin/cat $dmn_cache | jq .
+} # end function dnsme_get
+
+function dnsme_domains_list () {
+    dnsme_api  http://api.dnsmadeeasy.com/V2.0/dns/managed/  | jq --raw-output .data[].name
+}
+
+function dnsme_domain_id () { local domain_name=$1 domain_id
+    dnsme_get | jq -e -r '.data[] | select((.name=="'$1'") or (.id|tostring=="'$1'")) | .id'
+} # end function
+
+function dnsme_domain_id_from_name () {
+readme="dnsme_cat backward compatibility"
+	dnsme_domain_id "$@"
+}
+
+function dnsme_rm () {
+local domain domain_id id rcrd_id
+args_to_vars json "$@"
+rcrd_id=${id:-None}
+echo $domain_id $rcrd_id
+if [[ -n $rcrd_id ]] ; then
+	domain_id=$(dnsme_domain_id $domain) || return 1
+	dnsme_api $domain_id/records/$rcrd_id -X DELETE
+else
+	dnsme_api $domain_id -X DELETE -d "[$domain_id]"
+fi
+}
+
+function dnsme_configure_record () {
+info='provided for backward compatibility'
+domain=${1:-None}
+shift
+name=${1:-None}
+shift 
+type=$1
+shift
+value="$*"
+dnsme_push domain=$domain name=$name type=$type value="$value"
+} # function dnsme_configure_record
+
+
+function dnsme_push () {
+
+local domain name type value ttl json data
+args_to_vars json "$@"
+data="$json"
+
+[[ -z $type ]] &&
+if [[  -n $domain ]] ; then
+	data=$( jq -n "$data | { name: .domain }")
+    dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/ -X POST -d "$data"
+	if [[ $?==0 ]] ; then dnsme_autoupdate && dme updatedb $domain; fi
+	return
+else
+	return 1
+fi
+
+local domain_id
+domain_id=$( dnsme_domain_id $domain) || return 1
+data=$( jq -n "$data | del(.domain)")
+
+if [[ -z $ttl ]] ; then
+	ttl=1800
+	data=$( jq -n "$data | .ttl=$ttl")
+fi
+
+# Checking if the record exists
+# local res=$(dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records?recordName=${record_name}'&'type=$record_type)
+
+local res record_count
+res=$(dnsme_get $domain |
+jq '.data[] | select(.name=="'$name'" and .type=="'$type'")' |
+jq -s '{ data: . }'
+) # end res=
+
+if [[ -n $name ]] ; then
+		record_count=$( jq -e -n -r "$res | .data | length" 2>/dev/zero) ||
+			{ echo Something is wrong 1>&2 ; return 1 ; }
+	else
+		record_count=0 # naked records can be multiple
+fi
+
+# Adding/updating records.
+if (( record_count == 1 )) ; then
+    local record_id=$( $jq -r -n "$res | .data[0].id")
+    local old_value=$( $jq -r -n "$res | .data[0].value")
+    local data=$(jq -n "$data | .id=$record_id")
+    jq -n '{ res: { message: "Updating record. No output expected on success", name: "'$name'", id: '$record_id', value: "'$value'", source: "Oskar" } }'
+    dnsme_api $domain_id/records/$record_id -X PUT -d "$data" | jq
+elif [[ $record_count == 0 ]] ; then
+    dnsme_api $domain_id/records/ -X POST -d "$data" | jq
+else
+    echo $record_count identical records $name
+    return 1
+fi
+if [[ $?==0 ]] ; then dnsme_autoupdate && dme updatedb $domain; fi
+} # function dnsme_mk
+
+function dnsme_records_print () { local domain="$1" json
+info='Provided for backward compatibility'
+
+shift
+if is_json "$domain" ; then
+    json="$domain"
+    domain=$(jq -e -n -r "$json | .domain") || return 255
+    type=$(jq -e -n -r "$json | .type") && dnsme_args="type=$type&"
+    name=$(jq -e -n -r "$json | .name") && dnsme_args="$dnsme_args&recordName=${name}&"
+else
+    if [[ -n $1 ]] ; then
+        [[ -x$name == x@ ]] && unset name
+        dnsme_args="recordName=${name}&"
+    fi
+    shift
+    [[ -z $1 ]] && dnsme_args="type=$type&$dnsme_args"
+fi
+domain_id=$(dnsme_domain_id_from_name ${domain:-None}) || return 1
+
+local dnsme_args name type
+ReadMe='
+recordName=& returns naked records
+recordName=""& is like recordName=* or All records
+'
+# dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records?recordName=${record_name}'&'type=$record_type
+dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records"?${dnsme_args}" |
+$jq -r '.data | sort_by(.type) | { data: . }'
+} # end function
+
