@@ -144,7 +144,13 @@ fi
 } # end function dnsme_cd
 
 function dnsme () {
+
+DNSME_TMP_DIR=/dev/shm/$USER/tmp/dnsme
+mkdir -p $DNSME_TMP_DIR
+
+dnsme_cfg
 local action=$1
+[[ -z $action ]] && action=help
 shift
 dnsme_${action} "$@"
 } # end function dnsme
@@ -157,3 +163,32 @@ function dnsme_updatedb () {
 	echo $msg...
     dnsme_autorefresh=0 dnsme_get $dmn > /dev/zero
 } # end
+
+function dnsme_help () {
+cat << 'EOF'
+
+You activate dnsme by sourcing the all files that end with .functions and running dnsme 
+
+On the first run, dnsme would prompt you for API credentials .Make sure you have YOUR DNSME api key and secret key. 
+
+dnsme understands these commands:
+bye 
+cat
+cd
+ls
+mk
+mount 
+pwd
+set 
+updatedb
+
+dnsme pwd would print your current context. It can be either root dnsme:// or domain dnsme://<domain>:<domain id>
+There are two contexts: root and domain 
+To switch to root, type dnsme cd. You will see
+dnsme://
+If you 
+To switch to domain, type cd <domain>. If you have test.com
+dnsme://<domain>:<domain id> 
+
+EOF
+}

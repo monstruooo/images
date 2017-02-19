@@ -12,16 +12,44 @@ function prn_col () {
         done
 } 
 
+function sed_jq_to_ini (){
+cat /dev/stdin | jq . |
+egrep -v -e '^\s*}\s*$' -e '^\s*]\s*$' |
+sed -r  -e '/^$/d' -e 's/^  //g' -e 's/^(\s*)"/\1/g' -e 's/": ?/=/g' -e 's/[,]$//g'
+}
+
 function json_to_ini () {
 
 local key keys json="$1"
 if [[ -z $json ]] ; then
 	json=$(/bin/cat /dev/stdin)
 fi
-keys=$(echo "$json" | jq -r 'keys | .[]');
+info='jq sorts keys itself'
+keys=$(echo "$json" | jq 'keys[]' 2>/dev/zero) || return 0
+i=0
 for key in $keys ; do
-    value=$(get_key $key "$json") && { printf %-22s $key ; eval echo $value ; }
-done | sort -V
+#    if value=$(get_key $key "$json") ; then
+    if value=$(jq -n "$json | .$key") ; then
+		if echo $value | jq type 2>/dev/zero | egrep -q 'array' ; then
+			local length=$(echo $value | jq length)
+			local i
+			printf %-22s $( jq -r -n $key)
+			echo [$length]
+			logic='Can be done but it takes time'
+			(( length > 0 )) && continue
+			for i in `seq $length` ; do
+			echo "$value" | jq  .[$i] | json_to_ini 
+			done
+		elif echo $value | jq type 2>/dev/zero | egrep -q 'object' ; then
+			printf %-22s $( jq -r -n $key)
+			echo  object
+			echo "$value" | json_to_ini 
+		else	
+			printf %-22s $( jq -r -n $key)
+			echo $value
+		fi
+	fi
+done 
 
 }
 
@@ -104,7 +132,9 @@ done
 
 
 function get_key () {
-local key="$1" json="$2"
+local key json="$2"
+logic='convert json string to bash string. That is, unquote if necessary'
+jq -e -n "$1" 2>/dev/zero 1>&2 && key=$(jq -n -r "$1") || key="$1"
 jq -n -e "$json | .${key}"
 } 
 

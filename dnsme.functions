@@ -19,6 +19,8 @@ xargs printf '%-11s %-44s %-11s %-8s %s\n'
 
 function dnsme_api () {
 
+dnsme_throttle # Checking that the request rate is not exceeded
+
 request_date=$(
 { echo -n "$(date -u -R) " ; date -u +%Z ; } | cut -s -d' ' -f1-5,7
 )
@@ -37,15 +39,13 @@ api_uri=${api_uri#*/dns/managed/} # backward compatibility for calls that use fu
 
 local res=$DNSME_TMP_DIR/res
 curl -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" https://api.dnsmadeeasy.com/V2.0/dns/managed/$api_uri "$@" >$res 2>&1 ||
-{ code=$? ; echo Curl failed | egrep --color '.*' ; /bin/cat $res ; return $code ; }
+{ code=$? ; jqres code=$? src=${FUNCMAME[0]} msg="Curl failed: $(<$res)" 2>&1 ; return $code ; }
 
 info='If file exists or empty'
 if [[ -e $res && ! -s $res ]] ; then
 	jq -n '{ res: { code: 0, message: "No Output. No curl errors either" , source: "Oskar" } }'
 	return 0
-fi
-if ! is_json $res ; then
-    printf '\n %s \n\n' "DNSME Request failed" | egrep -C 3 --color '.*' 1>&2
+elif ! is_json $res ; then jqres code=1 source=${FUNCNAME[0]} msg="DNSME Request failed" 1>&2
     grep -q '<html>' $res && /bin/cat $res | lynx -dump --stdin 1>&2 || /bin/cat $res 1>&2
     return 1
 fi
@@ -56,6 +56,22 @@ else
 	/bin/cat $res | jq . 
 fi
 } # end dnsme_api
+
+function dnsme_throttle () {
+local FRAME=5 local LIMIT=150 # Request limit is 150 per 5 min
+dnsme_req_times=($(date +%s) $(echo ${dnsme_req_times[*]} | cut -d' ' -f 1-149))
+debug="dnsme_req_times: ${dnsme_req_times[*]}"
+(( ${#dnsme_req_times[*]} < 150 )) && return 0
+local start=${dnsme_req_times[150]}
+local frame_end=$(( start + FRAME*60 ))
+if (( frame_end > $(date +%s) )) ; then
+	local secs_wait=$(( frame_end - $(date +%s) ))
+	jqres code=0 src=${FUNCNAME[0]} msg="Rate limit exceeded. Waiting $secs_wait seconds" time="$(date)" 1>&2
+	sleep $secs_wait
+else
+	return 0 
+fi
+}
 
 function dnsme_get () {
 local readme='
