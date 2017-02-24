@@ -78,6 +78,7 @@ if [[ -z $dnsme_dmn ]] ; then
 		dnsme get | 
 		jq -r ' .data[] | select(.name=="'$1'" or (.id|tostring)=="'$1'")' |
 		json_to_ini
+		# dnsme_api $dnsme_dmn_id
 
 		dnsme get $1 | dnsme_record_to_cols
 	else
@@ -93,27 +94,32 @@ fi
 } #end function dnsme_ls
 
 function dnsme_mk () {
+local domain id name type value
 if [[ -z $dnsme_dmn ]] ; then 
-	[[ -n $1 ]] && dnsme_push '{ domain: '"$1"'}'
+	[[ -n $1 ]] && dnsme_domain_mk domain=$1
+	if [[ $?==0 ]] ; then dnsme_autoupdate && dnsme updatedb $domain; fi
 else
+	if (( ${#*} == 4 )) ; then
+		id=$1
+		shift
+	fi
 	name=${1/@/}
 	shift
 	type=$1
 	shift
 	value="$*"
-	dnsme_push domain=$dnsme_dmn name=$name type=$type value="$value"
+	dnsme_record_mk id=$id domain=$dnsme_dmn name=$name type=$type value="$value"
+	if [[ $?==0 ]] ; then dnsme_autoupdate && dnsme updatedb $dnsme_dmn; fi
 fi
 } # end function dnsme_mk
 
 function dnsme_bye () {
 if [[ -z $dnsme_dmn ]] ; then
-	echo Run manually dnsme rm domain_id=${dme_dmn_id:-None}
+	echo Run manually dnsme_domain_rm id=${dme_dmn_id:-None}
 else
 	if [[ -n $1 ]] ; then
-		for id in $* ; do
-			dnsme_autoupdate=OFF dnsme rm domain=$dnsme_dmn id=$id
-		done
-		dnsme_autoupdate && dnsme updatedb
+		dnsme_autoupdate=OFF dnsme_record_rm domain=$dnsme_dmn id=$1
+		if [[ $?==0 ]] ; then dnsme_autoupdate && dnsme updatedb $dnsme_dmn; fi
 	fi
 fi
 

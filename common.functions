@@ -18,6 +18,46 @@ egrep -v -e '^\s*}\s*$' -e '^\s*]\s*$' |
 sed -r  -e '/^$/d' -e 's/^  //g' -e 's/^(\s*)"/\1/g' -e 's/": ?/=/g' -e 's/[,]$//g'
 }
 
+function json_to_fs () {
+# cat  < <(  json_to_fs $testdir/ "$json" ) to hide info about bg processes
+local key keys dir=$1 json="$2" value ptype type
+if [[ -z $json ]] ; then
+	json=$(/bin/cat /dev/stdin)
+fi
+mkdir -p "$dir"
+ptype=$(echo $json| jq -r type)
+# jq sorts keys itself'
+keys=$(echo "$json" | jq 'keys[]' 2>/dev/zero) || return 0
+for key in $keys ; do
+    case $ptype in
+		array)
+		value=$(echo $json | jq .[$key])
+		;;
+		*)	
+		value=$(echo $json | jq .$key)
+		;;
+	esac
+	key=$( echo $key | jq -r . )
+	type=$(echo $value | jq -r type 2>/dev/zero) || continue
+	case $type in
+		array)
+		json_to_fs "$dir/${key}[]" "$value" &
+		echo "$json" >  "$dir"/.json
+		;;
+		object)
+		json_to_fs "$dir/${key}" "$value" &
+		echo "$json" >  "$dir"/.json
+		;;
+		*)
+		(( i <= 0 )) && continue	
+		/bin/echo "$value" > $dir/"$key" &
+		;;
+	esac
+done 
+wait
+((i--))
+}
+
 function json_to_ini () {
 
 local key keys json="$1"
@@ -77,18 +117,17 @@ jq -n --arg array "$array" {${arrname}': $array  | split("\n")}'
 
 function is_json () {
 if [[ -f "$1" ]] ; then
-	readme='jq returns 0 on empty file'
-	egrep -q -m 1 '{' "$1" >/dev/zero 2>&1 || { code=$? ; return $code ; }
-	/bin/cat "$1" | jq -e . >/dev/zero 2>&1 ; code=$? ; return $code ;
+    /bin/cat "$1"
 else
-	echo "$1" | egrep -q -m 1 '{'  >/dev/zero 2>&1 || { code=$? ; return $code ; }
-	jq -n -e "$1" >/dev/zero 2>&1  ; code=$? ; return $code ;
-fi
+    echo "$1"
+fi | jq -e . 2>/dev/zero |
+egrep -q -m 1 '{' 2>/dev/zero
+local trick='jq returns 0 on empty file. Grepping for '
 }
 
 function jqres () {
 args_to_vars json "$@"
-jq -n "$json | .code= (.code|tonumber) | { res: . }"
+jq -n "$json | { res: . }"
 }
 
 function has_key () {
@@ -101,33 +140,34 @@ fi
 } 
 
 function args_to_vars () {
-local arg key value j 
+local arg k j 
 json=0 
 if [[ x$1 == xjson ]] ; then
 	json=1
 	shift
 fi
-keys=
 for arg in "$@" ; do
-	key=${arg%%=*}
-	keys="$key $keys"
-	value=${arg#*=} 
-	for key in $key ; do
-		export $key="$value"
+	k=${arg%%=*}
+	#keys="$k $keys"
+	for k in $k ; do
+		export $k="${arg#*=}"
 	done
 done
 
 [[ $json == 0 ]] && return
+local key value
 json='{}'
 for arg in "$@" ; do
 	key=${arg%%=*}
-	value=${arg#*=}
+	value="${arg#*=}"
+	echo "$value" | jq type 1>/dev/zero 2>/dev/zero || value=$(echo $value | jq -R .)
 	if echo $value | egrep -q '^[0-9]+$' ; then
 		json=$( jq -n "$json | .$key=$value")
 	else
-		json=$( jq -n "$json | .$key=\"$value\"")
+		json=$( jq -n "$json | .$key=$value")
 	fi
 done  
+
 } # end function
 
 

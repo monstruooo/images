@@ -9,13 +9,26 @@ function dnsme_cfg () {
 [[ -z $dnsme_secret_key ]] && read -s -p 'API Secret Key: ' dnsme_secret_key
 } # end function dnsme_configure
 
-function dnsme_record_to_cols () {
+function dnsme_record_to_cols_bak () {
 while read -r line ; do
-    echo "$line"
-done | $jq -c -r '.data | sort_by(.type) | .[] |
-"\(.id) \( if .name == "" then "@" else .name end) \(.type) \(.ttl)  \(.value)"' |
-xargs printf '%-11s %-44s %-11s %-8s %s\n'
+    echo "$line" | jq -c -r '.data | sort_by(.type) | .[] |
+	"\(.id) \( if .name == "" then "@" else .name end) \(.type) \(.ttl)  \(.value)"' |
+	printf '%-11s %-44s %-11s %-8s %s'
+	echo 
+done
 } # end function
+
+function dnsme_record_to_cols () {
+/bin/cat /dev/stdin |
+jq -c '.data | sort_by(.type) | .[]' |
+while read -r line ; do
+	echo $line | jq -c -r '"\(.id) \( if .name == "" then "@" else .name end) \(.type) \(.ttl)  \(.value)"' |
+	xargs printf '%-11s %-44s %-11s %-8s %s'
+	local info="echo is needed because printf doesn't start new line if value is empty"
+	echo 
+done
+} # end function
+
 
 function dnsme_api () {
 
@@ -59,10 +72,11 @@ fi
 
 function dnsme_throttle () {
 local FRAME=5 local LIMIT=150 # Request limit is 150 per 5 min
-dnsme_req_times=($(date +%s) $(echo ${dnsme_req_times[*]} | cut -d' ' -f 1-149))
-debug="dnsme_req_times: ${dnsme_req_times[*]}"
-(( ${#dnsme_req_times[*]} < 150 )) && return 0
-local start=${dnsme_req_times[150]}
+dnsme_req_times="$(date +%s) $(echo $dnsme_req_times | cut -d' ' -f 1-149)"
+local debug="dnsme_req_times: $dnsme_req_times"
+local count=$(echo $dnsme_req_times| wc -w)
+(( count < 150 )) && return 0
+local start=$(echo $dnsme_req_times | cut -d' ' -f 150)
 local frame_end=$(( start + FRAME*60 ))
 if (( frame_end > $(date +%s) )) ; then
 	local secs_wait=$(( frame_end - $(date +%s) ))
@@ -79,8 +93,11 @@ local readme='
 ' # end readme=
 
 local cache=$DNSME_TMP_DIR/all.domains
-if ! is_json $cache || find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ; then
-	mkdir -p $( dirname $cache)
+mkdir -p $( dirname $cache)
+logic='( if cache not json or ( refresh set and cache is older than refresh), then refresh cache
+Also means: if cache is json and refresh unset, then dont refresh cache'
+if ! is_json $cache || ( [[ -n $dnsme_autorefresh ]] && find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
+then
 	# echo Updating DNSME domain cache 1>&2
 	dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/ > $cache
 fi
@@ -92,7 +109,7 @@ fi
 
 local dmn_cache=$DNSME_TMP_DIR/$1
 readme='if exists and json and not older than autorefresh'
-if is_json $dmn_cache  && find $dmn_cache -mmin -${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ; then
+if is_json $dmn_cache  && ( [[ -n $dnsme_autorefresh ]] && find $dmn_cache -mmin -${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ) ; then
 	/bin/cat $dmn_cache | jq .
 	return
 fi
@@ -107,7 +124,10 @@ dnsme_api $id/records  > $dmn_cache
 } # end function dnsme_get
 
 function dnsme_domains_list () {
-    dnsme_api  http://api.dnsmadeeasy.com/V2.0/dns/managed/  | jq --raw-output .data[].name
+info='Backward Compatibility'
+# dnsme_api  http://api.dnsmadeeasy.com/V2.0/dns/managed/  | jq --raw-output .data[].name
+dnsme_get  | jq --raw-output .data[].name
+
 }
 
 function dnsme_domain_id () { local domain_name=$1 domain_id
@@ -119,17 +139,18 @@ readme="dnsme_cat backward compatibility"
 	dnsme_domain_id "$@"
 }
 
-function dnsme_rm () {
-local domain domain_id id rcrd_id
+function dnsme_domain_rm () {
+local id
 args_to_vars json "$@"
-rcrd_id=${id:-None}
-echo $domain_id $rcrd_id
-if [[ -n $rcrd_id ]] ; then
-	domain_id=$(dnsme_domain_id $domain) || return 1
-	dnsme_api $domain_id/records/$rcrd_id -X DELETE
-else
-	dnsme_api $domain_id -X DELETE -d "[$domain_id]"
-fi
+dnsme_api $id -X DELETE -d "[$id]"
+}
+
+function dnsme_record_rm () {
+local domain domain_id id 
+args_to_vars json "$@"
+domain_id=$(dnsme_domain_id $domain) || return 1
+[[ -z $id ]] || return 2
+dnsme_api $domain_id/records/$id -X DELETE
 }
 
 function dnsme_configure_record () {
@@ -141,25 +162,27 @@ shift
 type=$1
 shift
 value="$*"
-dnsme_push domain=$domain name=$name type=$type value="$value"
+dnsme_record_mk domain=$domain name=$name type=$type value="$value"
 } # function dnsme_configure_record
 
-
-function dnsme_push () {
-
-local domain name type value ttl json data
+function dnsme_domain_mk () {
+local domain json data
 args_to_vars json "$@"
 data="$json"
-
-[[ -z $type ]] &&
 if [[  -n $domain ]] ; then
 	data=$( jq -n "$data | { name: .domain }")
     dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/ -X POST -d "$data"
-	if [[ $?==0 ]] ; then dnsme_autoupdate && dme updatedb $domain; fi
+	if [[ $?==0 ]] ; then dnsme_autoupdate && dnsme updatedb; fi
 	return
 else
 	return 1
 fi
+}
+
+function dnsme_record_mk () {
+local domain id name type value ttl json data
+args_to_vars json "$@"
+data="$json"
 
 local domain_id
 domain_id=$( dnsme_domain_id $domain) || return 1
@@ -170,36 +193,37 @@ if [[ -z $ttl ]] ; then
 	data=$( jq -n "$data | .ttl=$ttl")
 fi
 
-# Checking if the record exists
-# local res=$(dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records?recordName=${record_name}'&'type=$record_type)
-
 local res record_count
-res=$(dnsme_get $domain |
-jq '.data[] | select(.name=="'$name'" and .type=="'$type'")' |
-jq -s '{ data: . }'
-) # end res=
+flow='If no id and not naked record'
+if [[ -z $id && ! x$name == x ]] ; then
+	res=$(dnsme_get $domain |
+	jq '.data[] | select(.name=="'$name'")' |
+	jq -s '{ data: . }') # end res=$(
 
-if [[ -n $name ]] ; then
-		record_count=$( jq -e -n -r "$res | .data | length" 2>/dev/zero) ||
-			{ echo Something is wrong 1>&2 ; return 1 ; }
-	else
-		record_count=0 # naked records can be multiple
+	if ! record_count=$( jq -e -n -r "$res | .data | length" 2>/dev/zero) ; then
+		jqres code=1 src=${FUNCNAME[0]} msg="Something is wrong. Can not count records" 1>&2 
+		return 1
+	fi
+
+	if (( record_count == 0 )) ; then
+		info="Do nothing. Record id is already unset"
+	elif (( record_count == 1 )) ; then
+   		id=$( $jq -r -n "$res | .data[0].id")
+	elif (( record_count > 1 )) ; then
+   		jqres code=1 src=${FUNCNAME[0]} msg="$record_count identical records \"$name\" with value $value"
+   		return 1
+	fi
 fi
 
 # Adding/updating records.
-if (( record_count == 1 )) ; then
-    local record_id=$( $jq -r -n "$res | .data[0].id")
-    local old_value=$( $jq -r -n "$res | .data[0].value")
-    local data=$(jq -n "$data | .id=$record_id")
-    jq -n '{ res: { message: "Updating record. No output expected on success", name: "'$name'", id: '$record_id', value: "'$value'", source: "Oskar" } }'
-    dnsme_api $domain_id/records/$record_id -X PUT -d "$data" | jq
-elif [[ $record_count == 0 ]] ; then
-    dnsme_api $domain_id/records/ -X POST -d "$data" | jq
+if [[ -n $id ]] ; then
+    local old_value=$( dnsme_get $domain | $jq -r ".data[] | select(.id==$id) | .value" )
+    local data=$(jq -n "$data | .id=$id")
+    jqres src=${FUNCNAME[0]} msg="Updating record. No output expected on success" name=$name value=$value old_value=$old_value
+    dnsme_api $domain_id/records/$id -X PUT -d "$data" | jq
 else
-    echo $record_count identical records $name
-    return 1
+    dnsme_api $domain_id/records/ -X POST -d "$data" | jq
 fi
-if [[ $?==0 ]] ; then dnsme_autoupdate && dme updatedb $domain; fi
 } # function dnsme_mk
 
 function dnsme_records_print () { local domain="$1" json
@@ -231,3 +255,10 @@ dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records"?${dns
 $jq -r '.data | sort_by(.type) | { data: . }'
 } # end function
 
+function prn_dns_record () {
+local info='Backward Compatibility'
+local name=$1 type=$2
+shift ; shift 
+local value=$*
+printf "\t%-33s %-11s %-33s\n" $name $type "$value"
+} # end function
