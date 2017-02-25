@@ -70,9 +70,8 @@ fi
 } # end function dnsme_cat
 
 function dnsme_ls () {
-local name="${1}"
 if [[ -z $dnsme_dmn ]] ; then
-	if [[ -n $name ]] ; then
+	if [[ -n $1 ]] ; then
 		musing='Disabled it temporarily using this cool trick.
 				Its probably better to just print records'
 		[[ "" ]] &&
@@ -87,10 +86,8 @@ if [[ -z $dnsme_dmn ]] ; then
 		jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + "\t" + .name' |
 		xargs -L 1 printf '%-11s%s\n' 
 	fi
-elif [[ -n $name ]] ; then
-	dnsme get $dnsme_dmn | 
-	jq -c '.data[]|select(.name=="'${name/@/}'" or (.id|tostring)=="'${name/@/}'")' |
-	jq -s '{data: . }' |  json_to_ini
+elif [[ -n $1 ]] ; then
+	dnsme get $dnsme_dmn | jq -c '.data[]|select(.id|tostring=="'$1'")' |  json_to_ini
 else
 	dnsme get $dnsme_dmn | dnsme_record_to_cols
 fi
