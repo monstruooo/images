@@ -70,8 +70,9 @@ fi
 } # end function dnsme_cat
 
 function dnsme_ls () {
+local name="${1}"
 if [[ -z $dnsme_dmn ]] ; then
-	if [[ -n $1 ]] ; then
+	if [[ -n $name ]] ; then
 		musing='Disabled it temporarily using this cool trick.
 				Its probably better to just print records'
 		[[ "" ]] &&
@@ -86,8 +87,8 @@ if [[ -z $dnsme_dmn ]] ; then
 		jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + "\t" + .name' |
 		xargs -L 1 printf '%-11s%s\n' 
 	fi
-elif [[ -n $1 ]] ; then
-	dnsme get $dnsme_dmn | jq ".data[]|select(.id==$1)" | json_to_ini
+elif [[ -n $name ]] ; then
+	dnsme get $dnsme_dmn | jq '.data[]|select(.name=="'${name/@/}'" or (.id|tostring)=="'${name/@/}'")' | json_to_ini
 else
 	dnsme get $dnsme_dmn | dnsme_record_to_cols
 fi
@@ -97,19 +98,17 @@ function dnsme_mk () {
 local domain id name type value
 if [[ -z $dnsme_dmn ]] ; then 
 	[[ -n $1 ]] && dnsme_domain_mk domain=$1
-	if [[ $?==0 ]] ; then dnsme_autoupdate && dnsme updatedb $domain; fi
 else
 	if (( ${#*} == 4 )) ; then
 		id=$1
 		shift
 	fi
-	name=${1/@/}
+	name=${1}
 	shift
 	type=$1
 	shift
 	value="$*"
 	dnsme_record_mk id=$id domain=$dnsme_dmn name=$name type=$type value="$value"
-	if [[ $?==0 ]] ; then dnsme_autoupdate && dnsme updatedb $dnsme_dmn; fi
 fi
 } # end function dnsme_mk
 

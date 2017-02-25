@@ -32,6 +32,9 @@ done
 
 function dnsme_api () {
 
+local dnsme_url=https://api.dnsmadeeasy.com
+[[ x$sandbox == x1 ]] && dnsme_url=https://api.sandbox.dnsmadeeasy.com
+
 dnsme_throttle # Checking that the request rate is not exceeded
 
 request_date=$(
@@ -51,7 +54,7 @@ shift
 api_uri=${api_uri#*/dns/managed/} # backward compatibility for calls that use full url instead of uri
 
 local res=$DNSME_TMP_DIR/res
-curl -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" https://api.dnsmadeeasy.com/V2.0/dns/managed/$api_uri "$@" >$res 2>&1 ||
+curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $dnsme_url/V2.0/dns/managed/$api_uri "$@" >$res 2>&1 ||
 { code=$? ; jqres code=$? src=${FUNCMAME[0]} msg="Curl failed: $(<$res)" 2>&1 ; return $code ; }
 
 info='If file exists or empty'
@@ -183,6 +186,9 @@ function dnsme_record_mk () {
 local domain id name type value ttl json data
 args_to_vars json "$@"
 data="$json"
+
+data=$( echo "$json" | jq 'if .name=="@" then .name="" else . end')
+name=${name/@/}
 
 local domain_id
 domain_id=$( dnsme_domain_id $domain) || return 1
