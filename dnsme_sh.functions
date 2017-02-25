@@ -88,7 +88,9 @@ if [[ -z $dnsme_dmn ]] ; then
 		xargs -L 1 printf '%-11s%s\n' 
 	fi
 elif [[ -n $name ]] ; then
-	dnsme get $dnsme_dmn | jq '.data[]|select(.name=="'${name/@/}'" or (.id|tostring)=="'${name/@/}'")' | json_to_ini
+	dnsme get $dnsme_dmn | 
+	jq -c '.data[]|select(.name=="'${name/@/}'" or (.id|tostring)=="'${name/@/}'")' |
+	jq -s '{data: . }' |  json_to_ini
 else
 	dnsme get $dnsme_dmn | dnsme_record_to_cols
 fi
