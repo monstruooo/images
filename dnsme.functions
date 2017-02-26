@@ -24,7 +24,7 @@ jq -c '.data | sort_by(.type) | .[]' |
 while read -r line ; do
 	echo $line | jq -c -r '"\(.id) \( if .name == "" then "@" else .name end) \(.type) \(.ttl)  \(.value)"' |
 	xargs printf '%-11s %-44s %-11s %-8s %s'
-	local info="echo is needed because printf doesn't start new line if value is empty"
+	local info="echo is needed because printf doesn't start new line if .value is empty"
 	echo 
 done
 } # end function
@@ -55,19 +55,22 @@ api_uri=${api_uri#*/dns/managed/} # backward compatibility for calls that use fu
 
 local res=$DNSME_TMP_DIR/res
 curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $dnsme_url/V2.0/dns/managed/$api_uri "$@" >$res 2>&1 ||
-{ code=$? ; jqres code=$? src=${FUNCMAME[0]} msg="Curl failed: $(<$res)" 2>&1 ; return $code ; }
+{ code=$? ; jqres code=$code src=${FUNCMAME[0]} msg="Curl failed: $(<$res)" 2>&1 ; return $code ; }
 
-info='If file exists or empty'
 if [[ -e $res && ! -s $res ]] ; then
+local logic ='If no response file or empty'
 	jq -n '{ res: { code: 0, message: "No Output. No curl errors either" , source: "Oskar" } }'
 	return 0
 elif ! is_json $res ; then jqres code=1 source=${FUNCNAME[0]} msg="DNSME Request failed" 1>&2
+local logic='if response is not json. DNSME returns web pages on some errors'
     grep -q '<html>' $res && /bin/cat $res | lynx -dump --stdin 1>&2 || /bin/cat $res 1>&2
     return 1
 fi
 	
 if has_key error $res ; then
-	/bin/cat $res | jq -e ' . | .error | { error: . }'  1>&2  # reconstructing error can save you a lot of time troubleshooting
+local logic='
+	Reconstructing error can save you a lot of time troubleshooting'
+	/bin/cat $res | jq -e ' . | .error | { error: . }'  1>&2 
 else
 	/bin/cat $res | jq . 
 fi
