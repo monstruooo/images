@@ -102,12 +102,16 @@ else
 		id=$1
 		shift
 	fi
-	name=${1}
+	name="$1"
 	shift
 	type=$1
 	shift
 	value="$*"
-	dnsme_record_mk id=$id domain=$dnsme_dmn name=$name type=$type value="$value"
+	if [[ -n $id ]] ; then
+		dnsme_record_mk id=$id domain=$dnsme_dmn name="$name" type=$type value="$value"
+	else
+		dnsme_record_mk domain=$dnsme_dmn name="$name" type=$type value="$value"
+	fi
 fi
 } # end function dnsme_mk
 
@@ -163,7 +167,8 @@ function dnsme_updatedb () {
     local dmn
 	[[ -n $dnsme_dmn ]] && dmn=$dnsme_dmn
 	local msg="Updating DNSME cache"
-    [[ -n $1 ]] && { dmn=$1 ; msg="$msg & Domain $dmn cache" ; }
+    [[ -n $1 ]] && dmn=$1 
+	[[ -n $dmn ]] && msg="$msg & Domain $dmn cache"
 	echo $msg...
     dnsme_autorefresh=0 dnsme_get $dmn > /dev/zero
 } # end

@@ -21,7 +21,7 @@ sed -r  -e '/^$/d' -e 's/^  //g' -e 's/^(\s*)"/\1/g' -e 's/": ?/=/g' -e 's/[,]$/
 function json_to_ini () {
 # cat  < <(  json_to_fs $testdir/ "$json" ) to hide info about bg processes
 local key keys  path=$1 json="$2" value ptype type me fs=:
-(( "${#@}" == 1 )) && { json="$1" ; }
+(( "${#@}" == 1 )) && json="$1"
 me=${FUNCNAME[0]}
 if [[ -z $json ]] ; then
 	json=$(/bin/cat /dev/stdin)
@@ -56,6 +56,7 @@ for key in $keys ; do
 	esac
 done | { wait ; sort ; }
 }
+
 function json_to_fs () {
 # cat  < <(  json_to_fs $testdir/ "$json" ) to hide info about bg processes
 local key keys dir=$1 json="$2" value ptype type
@@ -128,7 +129,7 @@ egrep -q -m 1 '{' 2>/dev/zero # jq returns 0 on empty file. Grepping for {
 }
 
 function jqres () {
-args_to_vars json "$@"
+local json=$(args_to_json "$@")
 jq -n "$json | { res: . }"
 }
 
@@ -143,11 +144,6 @@ fi
 
 function args_to_vars () {
 local arg k j 
-json=0 
-if [[ x$1 == xjson ]] ; then
-	json=1
-	shift
-fi
 for arg in "$@" ; do
 	k=${arg%%=*}
 	#keys="$k $keys"
@@ -156,22 +152,30 @@ for arg in "$@" ; do
 	done
 done
 
-[[ $json == 0 ]] && return
-local key value
+} # end function
+
+function args_to_json () {
+local usage='
+	This function accepts arguments as domain=oskar-test.com id=12 etc
+	It automatically identifies the json type of value. Basically its only quoting strings.
+	If unsure, embed quotes thru escaping them as name=\"123\".
+	Empty arguments like name= for dnsme naked records are assumed to be empty strings. Its the same as name=\"\" '
+
+local key value arg json
 json='{}'
 for arg in "$@" ; do
 	key=${arg%%=*}
 	value="${arg#*=}"
-	[[ -z $value ]] && continue
-	echo "$value" | jq type 1>/dev/zero 2>/dev/zero || value=$(echo $value | jq -R .)
-	if echo $value | egrep -q '^[0-9]+$' ; then
-		json=$( jq -n "$json | .$key=$value")
-	else
-		json=$( jq -n "$json | .$key=$value")
-	fi
-done  
 
+	local next='
+		jq throws error if string is unquoted. jq -R surrounds it with quotes
+		jq does not return error on empty echo. So grep on jq type '
+	echo "$value" | jq -e type 2>/dev/zero | egrep -q '[a-z]' || value=$(echo $value | jq -R .)
+	json=$( jq -n "$json | .$key=$value")
+done  
+echo $json | jq .
 } # end function
+
 
 
 function get_key () {
