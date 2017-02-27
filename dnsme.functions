@@ -19,14 +19,16 @@ done
 } # end function
 
 function dnsme_record_to_cols () {
+local flow='
+	{ echo ... ; cat ... | jq ... ; } | awk ...
+	{      ... ;              ... ; } groups output of all commands for pipe'
+
+{ echo -e "Id\tName\tType\tTTL\tValue" ;
+
 /bin/cat /dev/stdin |
-jq -c '.data | sort_by(.type) | .[]' |
-while read -r line ; do
-	echo $line | jq -c -r '"\(.id) \( if .name == "" then "@" else .name end) \(.type) \(.ttl)  \(.value)"' |
-	xargs printf '%-11s %-44s %-11s %-8s %s'
-	local info="echo is needed because printf doesn't start new line if .value is empty"
-	echo 
-done
+jq -r '.data | sort_by(.type) | .[] |
+(.id|tostring) + "\t" + (if .name == "" then "@" else .name end) + "\t" + .type + "\t" + (.ttl|tostring) + "\t" + .value' ; } |
+awk -F"\t" '{printf "%-11s %-44s %-11s %-8s %s\n",$1,$2,$3,$4,$5}'
 } # end function
 
 
