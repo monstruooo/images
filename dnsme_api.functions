@@ -1,0 +1,123 @@
+#!/bin/bash
+
+DNSME_TMP_DIR=/dev/shm/$USER/tmp/dnsme
+mkdir -p $DNSME_TMP_DIR
+
+
+function dnsme_api () {
+
+local dnsme_url=https://api.dnsmadeeasy.com
+[[ x$sandbox == x1 ]] && dnsme_url=https://api.sandbox.dnsmadeeasy.com
+
+dnsme_throttle # Checking that the request rate is not exceeded
+
+request_date=$(
+{ echo -n "$(date -u -R) " ; date -u +%Z ; } | cut -s -d' ' -f1-5,7
+)
+
+hmac=$(echo -n "$request_date" | openssl sha1 -hmac "$dnsme_secret_key" | sed 's/.*= //g')
+
+# http headers
+api_key_H="x-dnsme-apiKey:$dnsme_api_key"
+hmac_H="x-dnsme-hmac:$hmac"
+req_date_H="x-dnsme-requestDate:$request_date"
+content_type_H="content-type:application/json"
+accept_type_H="accept:application/json"
+local api_uri=$1
+shift
+api_uri=${api_uri#*/dns/managed/} # backward compatibility for calls that use full url instead of uri
+
+local res=$DNSME_TMP_DIR/res
+curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $dnsme_url/V2.0/dns/managed/$api_uri "$@" >$res 2>&1 ||
+{ code=$? ; jqres code=$code src=${FUNCMAME[0]} msg="Curl failed: $(<$res)" 2>&1 ; return $code ; }
+
+if [[ -e $res && ! -s $res ]] ; then
+local logic='
+	If no response file or empty response file'
+	jq -n '{ res: { code: 0, message: "No Output. No curl errors either" , source: "Oskar" } }'
+	return 0
+elif ! is_json $res ; then jqres code=1 source=${FUNCNAME[0]} msg="DNSME Request failed" 1>&2
+local logic='
+	if response is not json. DNSME returns web pages on some errors'
+    grep -q '<html>' $res && /bin/cat $res | lynx -dump --stdin 1>&2 || /bin/cat $res 1>&2
+    return 1
+fi
+
+# For some reason dnsme returns errors as jq filter instead of json	
+if jq -n -e "$(cut -c 1-333 $res) | .error" >/dev/zero 2>&1 ; then
+local logic='
+	Reconstructing error can save you a lot of time troubleshooting'
+	jq -n -e "$( cut -c 1-333 $res) | { error: .error }" 1>&2 
+	return 3
+fi
+
+jq . $res 
+} # end dnsme_api
+
+function dnsme_throttle () {
+local FRAME=5 local LIMIT=150 # Request limit is 150 per 5 min
+dnsme_req_times="$(date +%s) $(echo $dnsme_req_times | cut -d' ' -f 1-149)"
+local debug="dnsme_req_times: $dnsme_req_times"
+local count=$(echo $dnsme_req_times| wc -w)
+(( count < 150 )) && return 0
+local start=$(echo $dnsme_req_times | cut -d' ' -f 150)
+local frame_end=$(( start + FRAME*60 ))
+if (( frame_end > $(date +%s) )) ; then
+	local secs_wait=$(( frame_end - $(date +%s) ))
+	jqres code=0 src=${FUNCNAME[0]} msg="Rate limit exceeded. Waiting $secs_wait seconds" time="$(date)" 1>&2
+	sleep $secs_wait
+else
+	return 0 
+fi
+}
+
+function dnsme_get () {
+local info='
+	If no argument is provided the function exits after pulling the list of domains '
+
+local cache=$DNSME_TMP_DIR/all.domains
+mkdir -p $( dirname $cache)
+local logic='( if cache not json or ( refresh set and cache is older than refresh), then refresh cache
+Also means: if cache is json and refresh unset, then dont refresh cache'
+if ! is_json $cache || ( [[ -n $dnsme_autorefresh ]] && find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
+then
+	# echo Updating DNSME domain cache 1>&2
+	dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/ > $cache
+fi
+
+if [[ -z $1 ]] ; then
+	/bin/cat $cache | jq .
+	return
+fi
+
+if [[ $1 =~ ^[0-9]+$ ]] ; then
+local debug='
+	This is domain id, not name'
+	name=$(/bin/cat $cache | jq -r -e '.data[] | select(.id=='$1') | .id') ||
+	{ jqres code=1 src=${FUNCNAME[0]} msg="No domain with id $1 found" 1>&2 ; return 1 ; }
+else
+	name=$1
+fi
+
+local dmn_cache=$DNSME_TMP_DIR/$name
+local bash_syntax='
+	find -mmin +3
+		Finds files modified more than 3 minutes ago
+	find -mmin -3
+		Finds files modified less than 3 minutes ago
+	find -mmin -0
+		Never finds anything'
+if ! is_json $dmn_cache  || ( [[ -n $dnsme_autorefresh ]] && find $dmn_cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ) ; then
+	local id
+	id=$(/bin/cat $cache | jq -r -e '.data[] | select(.name=="'$name'") | .id') ||
+	{ jqres code=1 src=${FUNCNAME[0]} msg="Domain $1 id not found" 1>&2 ; return 1 ; }
+	dnsme_api $id/records  > $dmn_cache
+fi
+/bin/cat $dmn_cache | jq .
+} # end function dnsme_get
+
+function dnsme_domain_id () { local domain_name=$1 domain_id
+    dnsme_get | jq -e -r '.data[] | select((.name=="'$1'") or (.id|tostring=="'$1'")) | .id' ||
+	{ jqres code=1 src=${FUNCNAME[0]} msg="Domain $1 id not found" 1>&2 ; return 1 ; }
+} # end function
+

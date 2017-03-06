@@ -3,6 +3,12 @@
 dnsme_autorefresh=3
 dnsme_autoupdate=ON
 
+function dnsme_cfg () {
+[[ x$1 == set ]] && unset dnsme_api_key dnsme_secret_key
+[[ -z $dnsme_api_key ]] && read -p 'API Key: ' dnsme_api_key
+[[ -z $dnsme_secret_key ]] && read -s -p 'API Secret Key: ' dnsme_secret_key
+} # end function dnsme_configure
+
 function dnsme_mount () {
 	dnsme set mount $*
 }
@@ -19,6 +25,7 @@ function dnsme_set() {
 case $1 in
 	shell|mount)
 	dnsme_alias="mk bye ls cat pwd help dme cd chdir url updatedb"
+	dnsme_alias=$(echo $dnsme_alias) # To make sure that all aliases are separated by one space
 	if [[ -n $dnsme_ps1_saved ]] ; then
 		PS1="$dnsme_ps1_saved"
 		unset dnsme_ps1_saved
@@ -41,9 +48,19 @@ case $1 in
 		echo dnsme $1 ON
 	fi
 	;;
+
 	autoupdate)
 	[[ x$dnsme_autoupdate == xON ]] && dnsme_autoupdate=OFF || dnsme_autoupdate=ON
 	echo DNSME autoupdate now set to $dnsme_autoupdate
+	;;
+
+	'')
+	cat <<EOF
+	dnsme_autoupdate    = $dnsme_autoupdate
+	dnsme_autorefresh   = $dnsme_autorefresh
+	dnsme_dmn           = $dnsme_dmn
+	dnsme_dmn_id        = $dnsme_dmn_id
+EOF
 	;;
 esac
 } # end function dnsme_shell
@@ -120,7 +137,7 @@ if [[ -z $dnsme_dmn ]] ; then
 	echo Run manually dnsme_domain_rm id=${dme_dmn_id:-None}
 else
 	if [[ -n $1 ]] ; then
-		dnsme_autoupdate=OFF dnsme_record_rm domain=$dnsme_dmn id=$1
+		dnsme_record_rm domain=$dnsme_dmn ids="$*"
 		if [[ $?==0 ]] ; then dnsme_autoupdate && dnsme updatedb $dnsme_dmn; fi
 	fi
 fi
