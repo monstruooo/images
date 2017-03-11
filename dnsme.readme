@@ -1,0 +1,56 @@
+You activate dnsme by sourcing all files that start with dnsme and end with .functions and running dnsme 
+
+for i in dnsme*.functions ; do source $i ; done
+
+Run command "dnsme mount". Your shell prompt will change to dnsme://. 
+
+On the first run, "dnsme mount" would prompt you for API credentials. If you have an account in dnsme, use the credentials of this account. 
+Alternatively, you can source the file sandbox.creds before you run dnsme. But this account is not guaranteed to be always valid
+
+Type "mk test.com" and press Enter to create domain "test-abc.com"
+
+Type "dnsme ls" and press Enter . You should see "test-abc.com" listed together with its DNSME API Id. Most calls to DNSME API use Ids and not domain names
+
+Domain Id  Domain name
+123456     test-abc.com
+
+Run command "dnsme cd test-abc.com". 
+
+The prompt changes to dnsme://test-abc.com:123456 (You will see a different number. This is the Id of the domain "test-abc.com")
+
+Type "mk test1 A 1.1.1.1" and press "Enter".
+
+Enter "dnsme ls" again.
+
+You should see:
+
+Id          Name                                         Type        TTL        Value
+10144637    test1                                        A           1800       1.1.1.1
+
+
+Type "mk A 1.1.1.1" and press "Enter" to create a naked A record.
+
+Run "dnsme ls" again. You should see something like:
+
+If you want to see more information about the record, run "dnsme ls 123456" where 123456 is the record id. 
+
+Now run "dnsme rm 123456". 123456 is the record ID. It will be different in your case.
+
+Run "dnsme ls" again and see that the record was deleted.
+
+"dnsme rm" can delete several records, if you run it as "dnsme rm <record1 id> <record2 id> etc"
+
+dnsme understands these commands:
+bye 
+cat
+cd
+ls
+mk
+mount 
+pwd
+set 
+updatedb
+
+bye can remove multiple records by their ids
+
+
