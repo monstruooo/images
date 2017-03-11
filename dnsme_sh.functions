@@ -9,9 +9,6 @@ function dnsme_cfg () {
 [[ -z $dnsme_secret_key ]] && read -s -p 'API Secret Key: ' dnsme_secret_key
 } # end function dnsme_configure
 
-function dnsme_mount () {
-	dnsme set mount $*
-}
 
 function dnsme_autoupdate () {
 	 [[ x$dnsme_autoupdate == xON ]] && return 0 || return 1
@@ -21,49 +18,27 @@ function dnsme_url () {
 echo https://cp.dnsmadeeasy.com/dns/managed/$dnsme_dmn_id
 }
 
+function dnsme_mount () {
+if [[ -n $dnsme_ps1_saved ]] ; then
+	PS1="$dnsme_ps1_saved"
+	unset dnsme_ps1_saved
+	echo dnsme $1 OFF
+else
+	[[ x$2 == x[Oo][Ff][Ff] ]] && { echo dnsme $1 OFF ; return ; }
+	dnsme_ps1_saved="$PS1"
+	PS1='$(dnsme pwd) ]$ '
+	echo dnsme $1 ON
+fi
+} # end function 
+
 function dnsme_set() {
-case $1 in
-	shell|mount)
-	dnsme_alias="mk bye ls cat pwd help dme cd chdir url updatedb"
-	dnsme_alias=$(echo $dnsme_alias) # To make sure that all aliases are separated by one space
-	if [[ -n $dnsme_ps1_saved ]] ; then
-		PS1="$dnsme_ps1_saved"
-		unset dnsme_ps1_saved
-		unalias $dnsme_alias 2>/dev/zero
-		eval "$dnsme_alias_saved"
-		echo dnsme $1 OFF
-	else
-		[[ x$2 == x[Oo][Ff][Ff] ]] && { echo dnsme $1 OFF ; return ; }
-		dnsme_ps1_saved="$PS1"
-		PS1='$(dnsme pwd) ]$ '
-		grep_str=$(echo $dnsme_alias | sed -r 's/ /|/g') # ls|cat|pwd...
-		dnsme_alias_saved=$(alias | egrep " (${grep_str})=")
-		unalias $dnsme_alias 2>/dev/zero
-		for alias in $dnsme_alias ; do
-			alias $alias="dnsme $alias "
-		done
-		alias dme=dnsme
-		alias chdir='dnsme cd'
-		alias url='dnsme url'
-		echo dnsme $1 ON
-	fi
-	;;
-
-	autoupdate)
-	[[ x$dnsme_autoupdate == xON ]] && dnsme_autoupdate=OFF || dnsme_autoupdate=ON
-	echo DNSME autoupdate now set to $dnsme_autoupdate
-	;;
-
-	'')
-	cat <<EOF
+cat <<EOF
 	dnsme_autoupdate    = $dnsme_autoupdate
 	dnsme_autorefresh   = $dnsme_autorefresh
 	dnsme_dmn           = $dnsme_dmn
 	dnsme_dmn_id        = $dnsme_dmn_id
 EOF
-	;;
-esac
-} # end function dnsme_shell
+} # end function 
 
 function dnsme_cat () {
 if [[ -z $dnsme_dmn ]] ; then
@@ -99,9 +74,12 @@ if [[ -z $dnsme_dmn ]] ; then
 
 		dnsme get $1 | dnsme_record_to_cols
 	else
+			{
+		echo -e "Domain Id\tDomain name" ;
 		dnsme get |
-		jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + "\t" + .name' |
-		xargs -L 1 printf '%-11s%s\n' 
+		jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + "\t" + .name' ;
+			} | 
+		column -x -t -s $'\t'
 	fi
 elif [[ -n $1 ]] ; then
 	dnsme get $dnsme_dmn | jq -c '.data[]|select(.id|tostring=="'$1'")' |  json_to_ini
@@ -132,9 +110,9 @@ else
 fi
 } # end function dnsme_mk
 
-function dnsme_bye () {
+function dnsme_rm () {
 if [[ -z $dnsme_dmn ]] ; then
-	echo Run manually dnsme_domain_rm id=${dme_dmn_id:-None}
+	echo Run manually dnsme_domain_rm id=$(dnsme_domain_id $1)
 else
 	if [[ -n $1 ]] ; then
 		dnsme_record_rm domain=$dnsme_dmn ids="$*"
