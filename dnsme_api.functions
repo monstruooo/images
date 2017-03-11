@@ -55,12 +55,13 @@ jq . $res
 } # end dnsme_api
 
 function dnsme_throttle () {
-local FRAME=5 local LIMIT=150 # Request limit is 150 per 5 min
-dnsme_req_times="$(date +%s) $(echo $dnsme_req_times | cut -d' ' -f 1-149)"
-local debug="dnsme_req_times: $dnsme_req_times"
-local count=$(echo $dnsme_req_times| wc -w)
-(( count < 150 )) && return 0
-local start=$(echo $dnsme_req_times | cut -d' ' -f 150)
+local LIMIT=150 FRAME=5 # Request limit is 150 per 5 min
+dnsme_req_times=( $(date +%s) ${dnsme_req_times[@]} )
+local debug="dnsme_req_times: ${dnsme_req_times[@]}"
+
+(( ${#dnsme_req_times[@]} < 150 )) && return 0
+unset dnsme_req_times[150]
+local start=${dnsme_req_times[149]}
 local frame_end=$(( start + FRAME*60 ))
 if (( frame_end > $(date +%s) )) ; then
 	local secs_wait=$(( frame_end - $(date +%s) ))
@@ -110,14 +111,13 @@ local bash_syntax='
 if ! is_json $dmn_cache  || ( [[ -n $dnsme_autorefresh ]] && find $dmn_cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ) ; then
 	local id
 	id=$(/bin/cat $cache | jq -r -e '.data[] | select(.name=="'$name'") | .id') ||
-	{ jqres code=1 src=${FUNCNAME[0]} msg="Domain $1 id not found" 1>&2 ; return 1 ; }
+	{ jqres code=1 src=${FUNCNAME[0]} msg="Domain $name id not found" 1>&2 ; return 1 ; }
 	dnsme_api $id/records  > $dmn_cache
 fi
 /bin/cat $dmn_cache | jq .
 } # end function dnsme_get
 
 function dnsme_domain_id () { local domain_name=$1 domain_id
-    dnsme_get | jq -e -r '.data[] | select((.name=="'$1'") or (.id|tostring=="'$1'")) | .id' ||
-	{ jqres code=1 src=${FUNCNAME[0]} msg="Domain $1 id not found" 1>&2 ; return 1 ; }
+    dnsme_get | jq -e -r '.data[] | select((.name=="'$1'") or (.id|tostring=="'$1'")) | .id' 
 } # end function
 
