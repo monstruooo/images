@@ -1,0 +1,16 @@
+#!/bin/bash
+
+function incap_pages_to_sites () {
+rm -f /dev/shm/oskars/tmp/incap/*
+for file in  /dev/shm/oskars/tmp/incapsula_conf_[0-9]* ; do
+        (
+        i=$(basename $file) ;
+        jq -e -c '.sites[]' $file |
+        while read -r line ; do
+        id=$(jq -n -r "$line"' | .domain + "_" + (.site_id|tostring)')
+        echo "$line" > /dev/shm/oskars/tmp/incap/$id ;
+        done
+        ) &
+done
+wait
+}
