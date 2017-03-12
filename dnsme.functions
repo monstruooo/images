@@ -1,32 +1,22 @@
 #!/bin/bash
 
-function dnsme_record_to_cols () {
-local flow='
-	{ echo ... ; cat ... | jq ... ; } | awk ...
-	{      ... ;              ... ; } groups output of all commands for pipe'
+function dnsme_records_table () {
 
-	{ 
-echo -e "Id\tName\tType\tTTL\tValue" ;
-
+	{
+echo -e "Id \t Name \t Type \t TTL \t Value" ;
 /bin/cat /dev/stdin |
 jq -r '.data | sort_by(.type) | .[] |
 (.id | tostring) 
-	+ "\t" + 
+	+ " \t " + 
 (if .name == "" then "@" else .name end) 
-	+ "\t" + 
+	+ " \t " + 
 .type 
-	+ "\t" + 
+	+ " \t " + 
 (.ttl | tostring) 
-	+ "\t" + 
+	+ " \t " + 
 .value' ; 
-	} | {
-IFS=$'\t' ;
-
-while read -r id name type value ; do
-	printf "%-11s %-44s %-11s %-8s %s\n" $id $name $type "$value"
-done ; 
-	}
-
+	} | 
+column -t -x -s $'\t'
 } # end function
 
 function dnsme_domain_rm () {
