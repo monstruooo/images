@@ -50,7 +50,7 @@ local logic='
     return 1
 fi
 
-jq -n . $res 
+echo $res 
 } # end dnsme_api
 
 function dnsme_throttle () {
@@ -79,7 +79,7 @@ local cache=$DNSME_TMP_DIR/all.domains
 mkdir -p $( dirname $cache)
 local logic='( if cache not json or ( refresh set and cache is older than refresh), then refresh cache
 Also means: if cache is json and refresh unset, then dont refresh cache'
-if ! $cache | is_json || ( [[ -n $dnsme_autorefresh ]] && find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
+if ! echo $cache | is_json || ( [[ -n $dnsme_autorefresh ]] && find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
 then
 	# echo Updating DNSME domain cache 1>&2
 	dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/ > $cache
