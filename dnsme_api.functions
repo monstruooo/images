@@ -79,7 +79,7 @@ local cache=$DNSME_TMP_DIR/all.domains
 mkdir -p $( dirname $cache)
 local logic='( if cache not json or ( refresh set and cache is older than refresh), then refresh cache
 Also means: if cache is json and refresh unset, then dont refresh cache'
-if ! is_json $cache || ( [[ -n $dnsme_autorefresh ]] && find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
+if ! $cache | is_json || ( [[ -n $dnsme_autorefresh ]] && find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
 then
 	# echo Updating DNSME domain cache 1>&2
 	dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/ > $cache
@@ -107,7 +107,7 @@ local bash_syntax='
 		Finds files modified less than 3 minutes ago
 	find -mmin -0
 		Never finds anything'
-if ! is_json $dmn_cache  || ( [[ -n $dnsme_autorefresh ]] && find $dmn_cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ) ; then
+if ! echo $dmn_cache | is_json || ( [[ -n $dnsme_autorefresh ]] && find $dmn_cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ) ; then
 	local id
 	id=$(/bin/cat $cache | jq -r -e '.data[] | select(.name=="'$name'") | .id') ||
 	{ jqres code=1 src=${FUNCNAME[0]} msg="Domain $name id not found" 1>&2 ; return 1 ; }
