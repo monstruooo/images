@@ -12,21 +12,7 @@ function prn_col () {
         done
 } 
 
-function sed_jq_to_ini (){
-cat /dev/stdin | jq . |
-egrep -v -e '^\s*}\s*$' -e '^\s*]\s*$' |
-sed -r  -e '/^$/d' -e 's/^  //g' -e 's/^(\s*)"/\1/g' -e 's/": ?/=/g' -e 's/[,]$//g'
-}
-
-function json_to_ini_flat () {
-# incapsula_site_status 1901344 | 
-# cat /dev/stdin | 
-jq -r -c --stream 'select((.[0]|length)==1 and (.[1]|type)!="null" and (.[1]|type)!="array") | 
-	.[0][0] + " \t= " + (.[1]|tostring)' | 
-	column -t -x -s$'\t' /dev/stdin
-}
-
-json_to_ini () {
+json2bash () {
 # select((.[1]|type)!="null" and (.[1]|type)!="array") | 
 jq  -r -c --stream '
 	if has(1) then . else empty end |
@@ -38,50 +24,7 @@ jq  -r -c --stream '
 	column -t -x -s$'\t'
 }
 
-function json_to_ini_bash () {
-# sort -V  | column -t -x -s$'\t'
-local key keys  path json value ptype type me 
-if [[ -n $1 ]] ; then
-	path="$1" 
-fi
-me=${FUNCNAME[0]}
-json=$(/bin/cat /dev/stdin)
-ptype=$(echo $json| jq -e -r type || return 1)
-# jq sorts keys itself'
-keys=$(echo "$json" | jq 'keys_unsorted[]' 2>/dev/zero) || return 0
-for key in $keys ; do
-	case $ptype in
-		array)
-		value=$(echo $json | jq .[$key])
-		;;
-		*)	
-		value=$(echo $json | jq .$key)
-		;;
-	esac
-
-	key=$( echo $key | jq -r . )
-	if [[ x$ptype == xarray ]] ; then
-		key="${path}[${key}]"
-	else
-		key="${path} ${key}"
-	fi
-
-	type=$(echo $value | jq -r type 2>/dev/zero) || continue
-	case $type in
-		array|object)
-		echo "$value" | $me "$key" #&
-		;;
-		*)
-		/bin/echo -e "$key \t= $value" 
-		;;
-	esac
-done 
-
-wait;
-}
-
-
-function json_to_fs () {
+function json2fs () {
 # cat  < <(  json_to_fs $testdir/ "$json" ) to hide info about bg processes
 local key keys dir=$1 json="$2" value ptype type
 if [[ -z $json ]] ; then

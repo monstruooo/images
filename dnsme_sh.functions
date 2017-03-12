@@ -69,7 +69,7 @@ if [[ -z $dnsme_dmn ]] ; then
 		[[ "" ]] &&
 		dnsme get | 
 		jq -r ' .data[] | select(.name=="'$1'" or (.id|tostring)=="'$1'")' |
-		json_to_ini
+		json2bash
 		# dnsme_api $dnsme_dmn_id
 
 		dnsme get $1 | dnsme_records_table
@@ -82,7 +82,7 @@ if [[ -z $dnsme_dmn ]] ; then
 		column -x -t -s $'\t'
 	fi
 elif [[ -n $1 ]] ; then
-	dnsme get $dnsme_dmn | jq -c '.data[]|select(.id|tostring=="'$1'")' |  json_to_ini
+	dnsme get $dnsme_dmn | jq -c '.data[]|select(.id|tostring=="'$1'")' |  json2bash
 else
 	dnsme get $dnsme_dmn | dnsme_records_table
 fi
