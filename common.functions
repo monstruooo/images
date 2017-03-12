@@ -144,7 +144,7 @@ jq -n --arg array "$array" {${arrname}': $array  | split("\n")}'
 }
 
 function is_json () {
-/bin/cat /dev/stdin | jq -e type 2>/dev/zero | egrep -q [a-z] 2>/dev/zero # jq returns empty string on type for empty input
+/bin/cat /dev/stdin | jq -e type 2>/dev/zero | egrep -q 'array|object' 2>/dev/zero
 }
 
 function jqres () {
