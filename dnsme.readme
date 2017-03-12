@@ -53,23 +53,26 @@ failover      = false
 monitor       = false
 sourceId      = 877324
 
-Now run "dnsme rm 123456". 123456 is the record ID. It will be different in your case.
+Now run "dnsme rm 10144637". 10144637 is the record ID. It will be different in your case.
 
 Run "dnsme ls" again and see that the record was deleted.
 
 "dnsme rm" can delete several records, if you run it as "dnsme rm <record1 id> <record2 id> etc"
 
-dnsme understands these commands:
-bye 
+Other commands you can use:
 cat
-cd
-ls
-mk
-mount 
 pwd
 set 
 updatedb
+purge
 
-bye can remove multiple records by their ids
+"dnsme pwd" will print the same dnsme shell prompt you see after you run "dnsme mount". 
+You can switch off dnsme shell prompt by running "dnsme mount" or "dnsme mount off"
+Use "dnsme pwd" if you are unsure about your context within dnsme.
+
+"dnsme set" prints dnsme variables such as working directory, autorefresh interval etc.
+
+"dnsme purge" removes from the domains cached in the working directories those domains that have been deleted.
+
 
 
