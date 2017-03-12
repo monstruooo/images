@@ -64,12 +64,12 @@ wait
 ((i--))
 }
 
-function json_to_vars () {
+function json2vars () {
 local keys json="$1"
-keys=$(echo "$json" | jq -r 'keys | .[]');
+keys=$(echo $json | jq -r keys[]);
 for key in $keys ; do
-    value=$(get_key $key "$json")
-	key=$value
+    value=$(echo $json | jq .$key)
+	export $key=$value
 done
 
 }
@@ -94,15 +94,6 @@ function jqres () {
 local json=$(args_to_json "$@")
 jq -n "$json | { res: . }"
 }
-
-function has_key () {
-local key="$1" json="$2"
-if [[ -f "$json" ]] ; then
-	/bin/cat "$json" | jq  -e '. | has("'$key'")' > /dev/zero
-else
-	jq -n -e "$json"' | . | has("'$key'")' > /dev/zero
-fi
-} 
 
 function args_to_vars () {
 local arg k j 
@@ -137,15 +128,6 @@ for arg in "$@" ; do
 done  
 echo $json | jq .
 } # end function
-
-
-
-function get_key () {
-local key json="$2"
-logic='convert json string to bash string. That is, unquote if necessary'
-jq -e -n "$1" 2>/dev/zero 1>&2 && key=$(jq -n -r "$1") || key="$1"
-jq -n -e "$json | .${key}"
-} 
 
 function json_dump_py () {
 local py_cmd='import sys,json;
