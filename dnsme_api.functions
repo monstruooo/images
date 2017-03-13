@@ -4,7 +4,7 @@ DNSME_TMP_DIR=/dev/shm/$USER/tmp/dnsme
 mkdir -p $DNSME_TMP_DIR
 
 
-function dnsme_api () {
+function dnsme_api_bak () {
 
 local dnsme_url=https://api.dnsmadeeasy.com
 [[ x$sandbox == x1 ]] && dnsme_url=https://api.sandbox.dnsmadeeasy.com
@@ -51,7 +51,60 @@ local logic='
 fi
 
 echo $res 
-} # end dnsme_api
+} # end function
+
+function dnsme_api () {
+
+local dnsme_url=https://api.dnsmadeeasy.com
+[[ x$sandbox == x1 ]] && dnsme_url=https://api.sandbox.dnsmadeeasy.com
+
+dnsme_throttle # Checking that the request rate is not exceeded
+
+request_date=$(
+{ echo -n "$(date -u -R) " ; date -u +%Z ; } | cut -s -d' ' -f1-5,7
+)
+
+hmac=$(echo -n "$request_date" | openssl sha1 -hmac "$dnsme_secret_key" | sed 's/.*= //g')
+
+# http headers
+api_key_H="x-dnsme-apiKey:$dnsme_api_key"
+hmac_H="x-dnsme-hmac:$hmac"
+req_date_H="x-dnsme-requestDate:$request_date"
+content_type_H="content-type:application/json"
+accept_type_H="accept:application/json"
+local api_uri=$1
+shift
+api_uri=${api_uri#*/dns/managed/} # backward compatibility for calls that use full url instead of uri
+
+curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $dnsme_url/V2.0/dns/managed/$api_uri "$@" 
+} # end function
+
+function dnsme_api_res () {
+local res
+res=$(dnsme_api "$@" 2>&1 ) || { code=$? ; jqres code=$code src=${FUNCMAME[0]} msg="Curl failed: $res" 2>&1 ; return $code ; }
+
+if [[ -z $res ]] ; then
+	jq -n '{ res: { code: 0, message: "No Output. No curl errors either" , source: "Oskar" } }'
+	return 0
+fi
+
+# For some reason dnsme returns errors as jq filter instead of json	
+if jq -n -e "$(echo $res | cut -c 1-333) | .error" >/dev/zero 2>&1 ; then
+local logic='
+	Reconstructing error can save you a lot of time troubleshooting'
+	jq -n -e "$( echo $res | cut -c 1-333) | { error: .error }" 1>&2 
+	return 1
+fi
+
+if ! echo $res | is_json ; then jqres code=1 source=${FUNCNAME[0]} msg="DNSME Request failed. Response is not json" 1>&2
+local logic='
+	if response is not json. DNSME returns web pages on some errors'
+    echo $res | grep -q '<html>' && echo $res | lynx -dump --stdin 1>&2 || echo $res 1>&2
+    return 2
+fi
+
+echo $res 
+} # end function
 
 function dnsme_throttle () {
 local LIMIT=150 FRAME=5 # Request limit is 150 per 5 min
@@ -82,7 +135,7 @@ Also means: if cache is json and refresh unset, then dont refresh cache'
 if ! cat $cache | is_json || ( [[ -n $dnsme_autorefresh ]] && find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
 then
 	# echo Updating DNSME domain cache 1>&2
-	dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/ > $cache
+	dnsme_api_res http://api.dnsmadeeasy.com/V2.0/dns/managed/ > $cache
 fi
 
 if [[ -z $1 ]] ; then
@@ -111,7 +164,7 @@ if ! cat $dmn_cache | is_json || ( [[ -n $dnsme_autorefresh ]] && find $dmn_cach
 	local id
 	id=$(/bin/cat $cache | jq -r -e '.data[] | select(.name=="'$name'") | .id') ||
 	{ jqres code=1 src=${FUNCNAME[0]} msg="Domain $name id not found" 1>&2 ; return 1 ; }
-	dnsme_api $id/records  > $dmn_cache
+	dnsme_api_res $id/records  > $dmn_cache
 fi
 /bin/cat $dmn_cache | jq .
 } # end function dnsme_get

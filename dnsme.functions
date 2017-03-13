@@ -22,7 +22,16 @@ column -t -x -s $'\t'
 function dnsme_domain_rm () {
 local id
 args_to_vars "$@"
-dnsme_api $id -X DELETE -d "[$id]"
+dnsme_api_res $id -X DELETE -d "[$id]"
+}
+
+function dnsme_domains_ls () {
+	{
+	echo -e "Domain Id \t Domain name" ;
+	dnsme get |
+	jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + " \t " + .name' ;
+	} | 
+	column -x -t -s $'\t'
 }
 
 function dnsme_record_rm () {
@@ -32,7 +41,7 @@ domain_id=$(dnsme_domain_id $domain) || return 1
 [[ -z $ids ]] && return 2
 ids=$(echo $ids) # second and every next record id to have exactly one leading space
 ids=${ids// /&ids=}
-dnsme_api $domain_id/records?ids=$ids -X DELETE
+dnsme_api_res $domain_id/records?ids=$ids -X DELETE
 }
 
 function dnsme_domain_mk () {
@@ -41,7 +50,7 @@ args_to_vars "$@"
 data=$(args_to_json "$@")
 if [[  -n $domain ]] ; then
 	data=$( jq -n "$data | { name: .domain }")
-    dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/ -X POST -d "$data"
+    dnsme_api_res https://api.dnsmadeeasy.com/V2.0/dns/managed/ -X POST -d "$data"
 else
 	return 1
 fi
@@ -91,9 +100,9 @@ if [[ -n $id ]] ; then
     local old_value=$( dnsme_get $domain | $jq -r ".data[] | select(.id==$id) | .value" )
     local data=$(jq -n "$data | .id=$id")
     jqres src=${FUNCNAME[0]} msg="Updating record. No output expected on success" name=$name value=$value old_value=$old_value
-    dnsme_api $domain_id/records/$id -X PUT -d "$data" | jq
+    dnsme_api_res $domain_id/records/$id -X PUT -d "$data" | jq
 else
-    dnsme_api $domain_id/records/ -X POST -d "$data" | jq
+    dnsme_api_res $domain_id/records/ -X POST -d "$data" | jq
 fi
 } # function dnsme_mk
 
@@ -135,7 +144,7 @@ fi
 domain_id=$(dnsme_domain_id_from_name ${domain:-None}) || return 1
 
 
-# dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records?recordName=${record_name}'&'type=$record_type
-dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records"?${dnsme_args}" |
+# dnsme_api_res http://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records?recordName=${record_name}'&'type=$record_type
+dnsme_api_res https://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records"?${dnsme_args}" |
 $jq -r '.data | sort_by(.type) | { data: . }'
 } # end function
