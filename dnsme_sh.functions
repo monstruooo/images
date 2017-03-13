@@ -2,6 +2,7 @@
 
 dnsme_autorefresh=3
 dnsme_autoupdate=ON
+dnsme_alias=ON
 
 function dnsme_cfg () {
 [[ x$1 == set ]] && unset dnsme_api_key dnsme_secret_key
@@ -9,6 +10,9 @@ function dnsme_cfg () {
 [[ -z $dnsme_secret_key ]] && read -s -p 'API Secret Key: ' dnsme_secret_key
 } # end function dnsme_configure
 
+function dnsme_alias () {
+	 echo $dnsme_alias | egrep -q -i on && return 0 || return 1
+}
 
 function dnsme_autoupdate () {
 	 [[ x$dnsme_autoupdate == xON ]] && return 0 || return 1
@@ -19,15 +23,30 @@ echo https://cp.dnsmadeeasy.com/dns/managed/$dnsme_dmn_id
 }
 
 function dnsme_mount () {
+local alias="cd ls cat mk rm updatedb purge" cmd
 if [[ -n $dnsme_ps1_saved ]] ; then
 	PS1="$dnsme_ps1_saved"
 	unset dnsme_ps1_saved
-	echo dnsme $1 OFF
+
+	if dnsme_alias ; then
+		for cmd in $alias ; do
+			unalias $cmd
+		done
+		eval "$dnsme_alias_saved"
+	fi
+	echo dnsme mount OFF
 else
 	[[ x$2 == x[Oo][Ff][Ff] ]] && { echo dnsme $1 OFF ; return ; }
 	dnsme_ps1_saved="$PS1"
 	PS1='$(dnsme pwd) ]$ '
-	echo dnsme $1 ON
+
+	if dnsme_alias ; then
+		for cmd in $alias ; do
+			alias $cmd="dnsme $cmd "
+		done
+		dnsme_alias_saved=$( alias )
+	fi
+	echo dnsme mount ON
 fi
 } # end function 
 
