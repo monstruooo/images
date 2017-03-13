@@ -93,7 +93,7 @@ fi
 if [[ $1 =~ ^[0-9]+$ ]] ; then
 local debug='
 	This is domain id, not name'
-	name=$(/bin/cat $cache | jq -r -e '.data[] | select(.id=='$1') | .id') ||
+	name=$(/bin/cat $cache | jq -r -e '.data[] | select(.id=='$1') | .name') ||
 	{ jqres code=1 src=${FUNCNAME[0]} msg="No domain with id $1 found" 1>&2 ; return 1 ; }
 else
 	name=$1
