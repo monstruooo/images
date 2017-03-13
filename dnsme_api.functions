@@ -47,7 +47,7 @@ if ! echo $res | is_json ; then jqres code=1 source=${FUNCNAME[0]} msg="DNSME Re
 local logic='
 	if response is not json. DNSME returns web pages on some errors'
     echo $res | grep -q '<html>' && echo $res | lynx -dump --stdin 1>&2 || echo $res 1>&2
-    return 1
+    return 2
 fi
 
 echo $res 
