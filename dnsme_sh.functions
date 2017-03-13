@@ -62,28 +62,25 @@ fi
 } # end function dnsme_cat
 
 function dnsme_ls () {
-if [[ -z $dnsme_dmn ]] ; then
-	if [[ -n $1 ]] ; then
-		musing='Disabled it temporarily using this cool trick.
-				Its probably better to just print records'
-		[[ "" ]] &&
-		dnsme get | 
-		jq -r ' .data[] | select(.name=="'$1'" or (.id|tostring)=="'$1'")' |
-		json2bash
-		# dnsme_api $dnsme_dmn_id
-
+local target_domain target_record
+if [[ x$1 == xdomains ]] ; then
+	# ... dnsme ls domains
+	dnsme_domains_ls
+elif [[ -z $dnsme_dmn ]] ; then  
+	# dnsme://
+	if [[ -n $1 ]] ; then  
+	# dnsme:// dnsme ls <domain>
 		dnsme get $1 | dnsme_records_table
-	else
-			{
-		echo -e "Domain Id \t Domain name" ;
-		dnsme get |
-		jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + " \t " + .name' ;
-			} | 
-		column -x -t -s $'\t'
+	else  
+	# dnsme:// dnsme ls
+		dnsme_domains_ls
 	fi
-elif [[ -n $1 ]] ; then
+elif [[ -n $1 ]] ; then   
+	# dnsme://<domain>:<domain id> dnsme ls <record id>
 	dnsme get $dnsme_dmn | jq -c '.data[]|select(.id|tostring=="'$1'")' |  json2bash
+
 else
+	# dnsme://<domain>:<domain id> dnsme ls <record id>
 	dnsme get $dnsme_dmn | dnsme_records_table
 fi
 } #end function dnsme_ls
@@ -165,34 +162,6 @@ function dnsme_updatedb () {
     [[ -n $1 ]] && dmn=$1 
 	[[ -n $dmn ]] && msg="$msg & Domain $dmn cache"
 	echo $msg...
-    dnsme_autorefresh=0 dnsme_get $dmn > /dev/zero
-} # end
-
-function dnsme_help () {
-cat << 'EOF'
-
-You activate dnsme by sourcing the all files that end with .functions and running dnsme 
-
-On the first run, dnsme would prompt you for API credentials .Make sure you have YOUR DNSME api key and secret key. 
-
-dnsme understands these commands:
-bye 
-cat
-cd
-ls
-mk
-mount 
-pwd
-set 
-updatedb
-
-dnsme pwd would print your current context. It can be either root dnsme:// or domain dnsme://<domain>:<domain id>
-There are two contexts: root and domain 
-To switch to root, type dnsme cd. You will see
-dnsme://
-If you 
-To switch to domain, type cd <domain>. If you have test.com
-dnsme://<domain>:<domain id> 
-
-EOF
-}
+	local dnsme_autorefresh=0 
+	dnsme_get $dmn > /dev/zero
+} # end function 
