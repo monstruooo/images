@@ -50,6 +50,7 @@ function dnsme_set() {
 cat <<EOF
 	dnsme_autoupdate    = $dnsme_autoupdate
 	dnsme_autorefresh   = $dnsme_autorefresh
+	dnsme_debug         = $dnsme_debug
 	dnsme_alias         = $dnsme_alias
 	dnsme_dmn           = $dnsme_dmn
 	dnsme_dmn_id        = $dnsme_dmn_id
@@ -134,8 +135,9 @@ fi
 } # end function dnsme_mk
 
 function dnsme_rm () {
+local name id
 if [[ -z $dnsme_dmn ]] ; then
-	echo Run manually dnsme_domain_rm id=$(dnsme_domain_id $1)
+	read -r name id < <(dnsme_domain_id $1) && echo Run manually dnsme_domain_rm id=$id || echo No such domain $1
 else
 	if [[ -n $1 ]] ; then
 		dnsme_record_rm domain=$dnsme_dmn ids="$*"
@@ -160,7 +162,7 @@ if [[ -z $1 ]] ; then
 	unset dnsme_dmn dnsme_dmn_id
 else 
 	local id
-	id=$(dnsme_domain_id $1) || { echo No such domain $1 1>&2 ; return 1; } 
+	read -r id id < <(dnsme_domain_id $1) || { echo No such domain $1 1>&2 ; return 1; } 
 	dnsme_dmn_id=$id dnsme_dmn=$1
 fi
 } # end function dnsme_cd
