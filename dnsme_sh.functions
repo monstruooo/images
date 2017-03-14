@@ -36,11 +36,11 @@ else
 	dnsme_ps1_saved="$PS1"
 	PS1='$(dnsme pwd) ]$ '
 
+	dnsme_alias_saved=$( alias )
 	if echo $dnsme_alias | grep -q -i on ; then
 		for cmd in $alias ; do
 			alias $cmd="dnsme $cmd "
 		done
-		dnsme_alias_saved=$( alias )
 	fi
 	echo dnsme mount ON
 fi
