@@ -97,7 +97,7 @@ if [[ -z $1 ]] ; then
 fi
 
 local name id
-read -r name id < <(/bin/cat $cache | jq -j -e '.data[] | select(.id|tostring=="'$1'" or .name=="'$1'") | .name , " ", .id') ||
+read -r name id < <(/bin/cat $cache | jq -j -e '.data[] | select((.id|tostring)=="'$1'" or .name=="'$1'") | .name , " ", .id') ||
 { jqres code=1 src=${FUNCNAME[0]} msg="No domain with id or name $1" 1>&2 ; return 1 ; }
 
 local dmn_cache=$DNSME_TMP_DIR/$name
@@ -115,7 +115,7 @@ fi
 } # end function dnsme_get
 
 function dnsme_domain_id () { local domain_name=$1 domain_id
-    dnsme_get | jq -e -j '.data[] | select((.name=="'$1'") or (.id|tostring=="'$1'")) | .name , " " , .id' 
+    dnsme_get | jq -e -j '.data[] | select((.name=="'$1'" or (.id|tostring)=="'$1'") | .name , " " , .id' 
 } # end function
 
 
