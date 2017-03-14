@@ -1,0 +1,6 @@
+1) Implement help
+2) Request throttling to fit the limit https://support.dnsmadeeasy.com/index.php?/Knowledgebase/Article/View/132/44/how-does-the-api-rate-limit-work
+DONE
+3) Sub-domains. Should they be implemented as sub-folders inside parent domains. They do appear in the list
+4) Add support for multirecord requests
+5) Add search capabilities
