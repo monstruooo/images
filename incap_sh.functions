@@ -7,50 +7,66 @@ function incap_cfg () {
 [[ -z $incap_api_key ]] && read -s "API Key: " incap_api_id
 }
 
+function incap_context () {
+case $incap_path_wd in
+	accounts)
+		[[ -n $incap_path_id ]] && echo account || echo accounts
+		;;
+	sites)
+		[[ -n $incap_path_id ]] && echo site || echo sites
+		;;
+	'')
+		echo root
+		;;
+esac
+} #end function
 
 function incap_pwd () {
-echo -n incapsula://$incap_wd
-if [[ -n $incap_wd_name ]] ; then
-	echo /${incap_wd_name}:${incap_wd_id}
+echo -n incapsula://$incap_path_wd
+if [[ -n $incap_path_name ]] ; then
+	echo /${incap_path_name}:${incap_path_id}
 else
 	echo
 fi
 }
 
 function incap_cd () {
-local id name
-if [[ x$1 == xaccounts ]] ; then
-	incap_wd=accounts
-elif [[ x$1 == xsites ]] ; then
-	incap_wd=sites
-elif [[ -z $1 ]] ; then
-	unset incap_wd incap_wd_name incap_wd_id
-	return 0
-fi
 
-shift
+case $1 in
+	accounts|sites|'') # '' means $1 is empty
+		incap_path_wd=$1 # if $1 is empty, incap_path_wd is unset, context switches to root
+		unset incap_path_name incap_path_id
+		return
+		;;
+esac
 
-if [[ -z $1 ]] ; then
-	unset incap_wd_id incap_wd_name
-	return
-fi
+[[ x$1 == x.. ]] && case $(incap_context) in
+	accounts|sites)
+		unset incap_path_wd
+		return
+	;;
+	account|site)
+		unset incap_path_name incap_path_id
+		return
+	;;
+esac
 
-if [[ x$incap_wd == xaccounts ]] ; then
-    read id name < <( 
+case $(incap_context) in
+accounts)
+    read incap_path_name incap_path_id < <( 
 	incapsula_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list |
-	jq -r -e '.accounts[] |
-	select(.account_name=="'"$1"'" or (.account_id|tostring)=="'"$1"'") |
-	(.account_id|tostring) + " " + .account_name' ) || return
-elif [[ x$incap_wd == xsites ]] ; then
-    read id name < <( 
+	jq -j -e '.accounts[] |
+	select(.account_name=="'"$1"'" or (.account_id | tostring)=="'"$1"'") |
+	.account_name , " " , (.account_id | tostring)' ) || return
+;;
+sites)
+    read incap_path_name incap_path_id < <( 
 	incapsula_conf_print |
-	jq -r -e '.sites[] |
-	select(.domain=="'"$1"'" or (.site_id|tostring)=="'"$1"'") |
-	(.site_id|tostring) + " " + .domain' ) || return
-fi
-incap_wd_id=$id
-incap_wd_name=$name
-
+	jq -j -e '.sites[] |
+	select(.domain=="'"$1"'" or (.site_id | tostring)=="'"$1"'") |
+	.domain , " " , (.site_id | tostring)' ) || return
+;;
+esac
 }
 
 function incap_ls () {
