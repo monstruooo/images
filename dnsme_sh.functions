@@ -4,19 +4,15 @@ dnsme_autorefresh=3
 dnsme_autoupdate=ON
 dnsme_alias=ON
 
+function dnsme_autoupdate () {
+	echo $dnsme_autoupdate | egrep -q -i on && return 0 || return 1
+}
+
 function dnsme_cfg () {
 [[ x$1 == set ]] && unset dnsme_api_key dnsme_secret_key
 [[ -z $dnsme_api_key ]] && read -p 'API Key: ' dnsme_api_key
 [[ -z $dnsme_secret_key ]] && read -s -p 'API Secret Key: ' dnsme_secret_key
 } # end function dnsme_configure
-
-function dnsme_alias () {
-	 echo $dnsme_alias | egrep -q -i on && return 0 || return 1
-}
-
-function dnsme_autoupdate () {
-	 [[ x$dnsme_autoupdate == xON ]] && return 0 || return 1
-}
 
 function dnsme_url () {
 echo https://cp.dnsmadeeasy.com/dns/managed/$dnsme_dmn_id
@@ -28,7 +24,7 @@ if [[ -n $dnsme_ps1_saved ]] ; then
 	PS1="$dnsme_ps1_saved"
 	unset dnsme_ps1_saved
 
-	if dnsme_alias ; then
+	if echo $dnsme_alias | grep -q -i on ; then
 		for cmd in $alias ; do
 			unalias $cmd
 		done
@@ -40,7 +36,7 @@ else
 	dnsme_ps1_saved="$PS1"
 	PS1='$(dnsme pwd) ]$ '
 
-	if dnsme_alias ; then
+	if echo $dnsme_alias | grep -q -i on ; then
 		for cmd in $alias ; do
 			alias $cmd="dnsme $cmd "
 		done
@@ -54,6 +50,7 @@ function dnsme_set() {
 cat <<EOF
 	dnsme_autoupdate    = $dnsme_autoupdate
 	dnsme_autorefresh   = $dnsme_autorefresh
+	dnsme_alias         = $dnsme_alias
 	dnsme_dmn           = $dnsme_dmn
 	dnsme_dmn_id        = $dnsme_dmn_id
 EOF
@@ -142,7 +139,9 @@ if [[ -z $dnsme_dmn ]] ; then
 else
 	if [[ -n $1 ]] ; then
 		dnsme_record_rm domain=$dnsme_dmn ids="$*"
-		if [[ $?==0 ]] ; then dnsme_autoupdate && dnsme updatedb $dnsme_dmn; fi
+		if (( $?==0 )) && dnsme_autoupdate ; then
+			dnsme updatedb $dnsme_dmn
+		fi
 	fi
 fi
 
@@ -179,11 +178,11 @@ dnsme_${action} "$@"
 } # end function dnsme
 	
 function dnsme_updatedb () {
-local dnsme_autorefresh=0 dmn
+local dmn=$1 dnsme_autorefresh=0 msg="Updating DNSME cache"
+
 	[[ -n $dnsme_dmn ]] && dmn=$dnsme_dmn
-	local msg="Updating DNSME cache"
-    [[ -n $1 ]] && dmn=$1 
 	[[ -n $dmn ]] && msg="$msg & Domain $dmn cache"
+
 	echo $msg...
 	dnsme_get $dmn > /dev/zero
 } # end function 
