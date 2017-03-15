@@ -9,18 +9,18 @@ Alternatively, you can source the file sandbox.creds before you run dnsme. But t
 
 Type "mk test.com" and press Enter to create domain "test-abc.com"
 
-Type "dnsme ls" and press Enter . You should see "test-abc.com" listed together with its DNSME API Id. Most calls to DNSME API use Ids and not domain names
+Type "dnsme ll" and press Enter . You should see "test-abc.com" listed together with its DNSME API Id. Most calls to DNSME API use Ids and not domain names
 
 Domain Id  Domain name
 877324     test-abc.com
 
-Run command "dnsme cd test-abc.com". 
+Run command "dnsme cc test-abc.com". 
 
 The prompt changes to dnsme://test-abc.com:877324 (You will see a different number. This is the Id of the domain "test-abc.com")
 
 Type "mk test1 A 1.1.1.1" and press "Enter".
 
-Enter "dnsme ls" again.
+Enter "dnsme ll" again.
 
 You should see:
 
@@ -30,14 +30,14 @@ Id          Name                                         Type        TTL        
 
 Type "mk A 1.1.1.1" and press "Enter" to create a naked A record.
 
-Run "dnsme ls" again. You should see:
+Run "dnsme ll" again. You should see:
 
 Id          Name                                         Type        TTL        Value
 10144638    @                                            A           1800       1.1.1.1
 10144637    test1                                        A           1800       1.1.1.1
 
 
-If you want to see more information about the record, run "dnsme ls 123456" where 123456 is the record id. 
+If you want to see more information about the record, run "dnsme ll 123456" where 123456 is the record id. 
 
 name          = test1
 value         = 1.1.1.1
@@ -53,14 +53,14 @@ failover      = false
 monitor       = false
 sourceId      = 877324
 
-Now run "dnsme rm 10144637". 10144637 is the record ID. It will be different in your case.
+Now run "dnsme dl 10144637". 10144637 is the record ID. It will be different in your case.
 
-Run "dnsme ls" again and see that the record was deleted.
+Run "dnsme ll" again and see that the record was deleted.
 
-"dnsme rm" can delete several records, if you run it as "dnsme rm <record1 id> <record2 id> etc"
+"dnsme dl" can delete several records, if you run it as "dnsme dl <record1 id> <record2 id> etc"
 
 Other commands you can use:
-cat
+js
 pwd
 set 
 updatedb

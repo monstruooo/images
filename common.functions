@@ -12,6 +12,13 @@ function prn_col () {
         done
 } 
 
+function wk () {
+local usage=<<'EOF'
+ls -l | wk '$1,$3' 
+EOF
+	cat /dev/stdin | awk '{print '"$*"'}'
+} # end function
+
 json2bash () {
 # select((.[1]|type)!="null" and (.[1]|type)!="array") | 
 jq  -r -c --stream '
