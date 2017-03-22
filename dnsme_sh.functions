@@ -18,7 +18,7 @@ echo https://cp.dnsmadeeasy.com/dns/managed/$dnsme_dmn_id
 }
 
 function dnsme_mount () {
-local alias="cc ll js mk dl updatedb purge" cmd
+local alias="cc pwd context ll js mk dl updatedb purge" cmd
 if [[ -n $dnsme_ps1_saved ]] ; then
 	PS1="$dnsme_ps1_saved"
 	unset dnsme_ps1_saved

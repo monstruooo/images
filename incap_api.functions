@@ -15,3 +15,47 @@ while read -r domain site_id json ; do
 done
 } # end function
 
+function incap_site_id () {
+incapsula_conf_print  | 
+	jq -e -c -j '.sites[] |
+{ domain , site_id , cname:(.dns[] | select(.set_type_to=="CNAME") | .set_data_to[]) } |
+select(.cname=="'$1'" or (.site_id|tostring)=="'$1'" or .domain=="'$1'") | 
+.site_id,
+" \t ",
+.domain,
+" \t ",
+.cname,
+"\n" '
+} # end function 
+
+function incap_sites_ll () {
+local info='
+	you can both list all sites or filter them by origin ip or the account'
+
+incapsula_conf_print |
+jq -e '.sites[] |
+if "'"$1"'" == "" then
+	.
+else
+	select((.account_id|tostring) == "'"$1"'" or (.ips|inside(["'"$1"'"])) )
+end ' | 
+incap_site_to_cols
+} # end function
+
+function incap_accounts_ll () {
+	{
+	echo -e "Account ID\tAccount Name" ;
+	incapsula_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list |
+	jq -r '.accounts | sort_by(.account_name) | .[] |
+	if "'"$*"'" == ""
+	then
+		.
+	else
+		select(.account_name=="'"$*"'" or (.account_id | tostring)=="'"$*"'")
+	end |
+	(.account_id|tostring) + " \t " + .account_name' ;
+	} |
+	column -x -t -s$'\t'
+}
+
+

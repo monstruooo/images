@@ -7,6 +7,30 @@ function incap_cfg () {
 [[ -z $incap_api_key ]] && read -s "API Key: " incap_api_id
 }
 
+
+function incap_mount () {
+local alias="cc pwd context ll js mk dl updatedb set_ip purge" cmd
+if [[ -n $incap_ps1_saved ]] ; then
+	PS1="$incap_ps1_saved"
+	unset incap_ps1_saved
+
+	for cmd in $alias ; do
+		unalias $cmd
+	done
+	alias ll="ls -l "
+	echo incap mount OFF
+else
+	[[ x$2 == x[Oo][Ff][Ff] ]] && { echo incap $1 OFF ; return ; }
+	incap_ps1_saved="$PS1"
+	PS1='$(incap pwd) ]$ '
+
+	for cmd in $alias ; do
+		alias $cmd="incap $cmd "
+	done
+	echo incap mount ON
+fi
+} # end function 
+
 function incap_context () {
 case $incap_path_wd in
 	accounts)
@@ -30,11 +54,16 @@ else
 fi
 }
 
-function incap_cd () {
+function incap_cc () {
+
+if [[ -z $1 || x$1 == x/ ]] ; then # incap cc / ; incap cc
+	unset incap_path_name incap_path_id incap_path_wd
+	return
+fi
 
 case $1 in
-	accounts|sites|'') # '' means $1 is empty
-		incap_path_wd=$1 # if $1 is empty, incap_path_wd is unset, context switches to root
+	accounts|sites) 
+		incap_path_wd=$1
 		unset incap_path_name incap_path_id
 		return
 		;;
@@ -53,71 +82,233 @@ esac
 
 case $(incap_context) in
 accounts)
-    read incap_path_name incap_path_id < <( 
-	incapsula_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list |
-	jq -j -e '.accounts[] |
-	select(.account_name=="'"$1"'" or (.account_id | tostring)=="'"$1"'") |
-	.account_name , " " , (.account_id | tostring)' ) || return
+    read incap_path_id incap_path_name < <( 
+	incap_accounts_ll $1 |
+	egrep -v 'Account Name')
+	[[ x$incap_path_id =~ ^x[0-9]+$ ]] || unset incap_path_id incap_path_name
 ;;
-sites)
-    read incap_path_name incap_path_id < <( 
-	incapsula_conf_print |
-	jq -j -e '.sites[] |
-	select(.domain=="'"$1"'" or (.site_id | tostring)=="'"$1"'") |
-	.domain , " " , (.site_id | tostring)' ) || return
+
+sites|account)
+	res=$( incap_site_id $1 ) || return
+    read incap_path_id incap_path_name cname <<< "$res"
+	incap_path_wd=sites # If context is account
 ;;
 esac
 }
 
-function incap_ls () {
-if [[ -z $1 ]] ; then
-	if [[ -z $incap_wd ]] ; then
-		echo sites
-		echo accounts
-	elif [[ $incap_wd == accounts ]] ; then
-		if [[ -n $incap_wd_id ]] ; then
-			incapsula_conf_print |
-				jq -r '.sites[] | select(.account_id=='$incap_wd_id')' |
-				incap_site_to_cols
-		else
-			{
-			echo -e "Account ID\tAccount Name" ;
-		    incapsula_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list |
-			jq -r '.accounts | sort_by(.account_name) | .[] | (.account_id|tostring) + "\t" + .account_name' ;
-			} |
-			column -x -t -s$'\t'
-		fi
-	fi
-elif [[ x$1 == xaccounts ]] ; then
+function incap_ll () {
+
+if [[ x$1 == xaccounts ]] ; then
 	if [[ -n $2 ]] ; then
-		incapsula_conf_print |
-			jq -r '.sites[] | select(.account_id|tostring=="'$2'")' |
-			incap_site_to_cols
+		shift
+		incap_sites_ll $1
 	else
-		{
-		echo -e "Account ID\tAccount Name" ;
-	    incapsula_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list |
-			jq -r '.accounts | sort_by(.account_name) | .[] | (.account_id|tostring) + "\t" + .account_name' ;
-		} |
-			column -x -t -s$'\t'
+		incap_accounts_ll
 	fi
+	return
 elif [[ x$1 == xsites ]] ; then
 	if [[ -n $2 ]] ; then
-		incapsula_site_status $2 | incap_site_summary
+		shift
+		incapsula_site_status $1 | incap_site_summary
 	else
-		incapsula_conf_print |
-			jq -r '.sites[]' |
-			incap_site_to_cols
+		incap_sites_ll
 	fi
+	return
 fi
+
+case $(incap_context) in
+	root)
+		case x$1 in
+			x)
+				echo sites
+				echo accounts
+			;;
+			xaccounts)
+				incap_accounts_ls
+			;;
+			xsites)
+				incapsula_sites_ll
+			;;
+			*)
+				echo I dont understand your command
+			;;
+		esac
+		return
+	;;
+	accounts)
+		if [[ -n $1 ]] ; then
+			incap_sites_ll $1
+		else
+			incap_accounts_ll
+		fi
+	;;
+	sites)
+		if [[ -n $1 ]] ; then
+			incapsula_site_status $1 | incap_site_summary
+		else
+			incap_sites_ll
+		fi
+	;;
+	account)
+		if [[ -n $1 ]] ; then
+			incapsula_site_status $1 | incap_site_summary
+		else
+			incap_sites_ll $incap_path_id
+		fi
+	;;
+	site)
+			incapsula_site_status $incap_path_id | json2bash
+	;;
+esac
 }
+
+function incap_set_ip () { 
+local usage='
+	incap set_ip <ip|hostname>'
+
+if [[ -z $1 ]] ; then
+	echo Usage: "$usage" 1>&2
+	return 1
+elif [[ ! x$(incap context) == xsite ]] ; then
+	echo You should cc to the site you want to change IP to 1>&2
+	return 1
+fi
+	
+local old_ips
+old_ips=$(incapsula_site_status $incap_path_id | jq '.ips')
+incapsula_api "site_id=$incap_path_id&param=site_ip&value=$1" prov/v1/sites/configure | 
+jq '.|={site_id , domain , new_ips: .ips} | .old_ips='"$old_ips"
+} # end function
 
 function incap_mk () {
 local usage='
-	incap mk test-account test.com 1.2.3.4'
+	incap mk <site name> <dest ip/hostname>'
 
-	incap site add account=$1 domain=$2 ip=$3
+	if [[ ! x$(incap_context) == xaccount ]] ; then
+		echo Change to the account the site should be created in 1>&2
+		return 1
+	elif [[ -z $1 || -z $2 ]] ; then
+		echo Usage:"$usage"
+		return 2
+	fi
+		
+	incap site add account_id=$incap_path_id domain=$1 site_ip=$2
 }
+
+function incap_purge () {
+local usage='
+	purge cache
+	purge hostname cache'
+
+if [[ ! x$(incap context) == xsite ]] ; then
+	echo You should cc to site you want to purge 1>&2
+	return 1
+fi
+case "$1 $2" in
+	"cache ")
+		echo Purging site $incap_path_name cache...
+		incapsula_api site_id=${incap_path_id} prov/v1/sites/cache/purge | jq .
+	;;
+	"hostname cache")
+		echo Purging $incap_path_name from hostname cache. This operation may take a few seconds...
+		incapsula_api host_name=${incap_path_name} prov/v1/sites/hostname/purge | jq .
+	;;
+	*)
+		echo Usage: "$usage" 1>&2
+	;;
+esac
+}
+
+incap_site_summary () {
+cat /dev/stdin |
+jq -r '
+"Site Name"
+	+ "\t = " +
+		.domain?,
+
+"Site Status"
+	+ "\t = " +
+		.status,
+
+"Account ID"
+	+ "\t = " +
+		(.account_id|tostring),
+
+"Origin"
+	+ "\t = " +
+		(.ips|join(",")), 
+
+"Cache Mode"
+	+ "\t = " +
+		.performance_configuration.acceleration_level?,
+
+"Block URLs"
+	+ "\t = " +
+		(.security.acls.rules[]|select(.id=="api.acl.blacklisted_urls")|[ .urls[].value ] | join(",") ),
+
+"SSL CA"
+	+ "\t = " +
+		.ssl.generated_certificate.ca,
+
+"SSL San"
+	+ "\t = " +
+		(.ssl.generated_certificate.san | join(",")),
+
+"SSL Detection"
+	+ "\t = " +
+		(.ssl.origin_server.detected | tostring),
+
+"SSL Detection Status"
+	+ "\t = " +
+		.ssl.origin_server.detectionStatus,
+
+"SSL Validation Status"
+	+ "\t = " +
+		.ssl.generated_certificate.validation_status,
+
+"DNS CNAME Record"
+	+ "\t = " +
+		({ dns: [(.dns[] | select(.set_type_to=="CNAME"))? ]} |
+		if .[] | length == 1 then .dns[0].set_data_to | join(",") else "N/A" end ),
+
+"DNS A Records"
+	+ "\t = " +
+		({ dns: [(.dns[] | select(.set_type_to=="A"))? ]} |
+		if .[] | length == 1 then .dns[0].set_data_to | join(",") else "N/A" end )
+	' | 
+	column -x -t -s$'\t'
+}
+
+function incap_site_to_cols () {
+local flow='
+	{ 
+	echo ... ;
+	cat stdin ... |
+	jq ...
+	jq continues ; 
+	} | {
+	while read ... 
+	}
+	{} groups output of commands for pipe input/output'
+
+	{ 
+echo -e "Site Id\tSite Name\tAccount\tIPs\tCNAME" ;
+
+/bin/cat /dev/stdin |
+jq -r '
+(.site_id|tostring) 
+	+ "\t" +
+.domain 
+	+ "\t" +
+(.account_id|tostring) 
+	+ "\t" +
+(.ips|join(",") | .[0:44] )
+	+ "\t" +
+({ dns: [(.dns[]|select(.set_type_to=="CNAME"))? ]} | if .[]|length==1 then .dns[0].set_data_to|join(",") else "N/A" end )' ; # end jq -r
+	} | 
+	column -x -t -s$'\t'
+}
+
 
 function incap () {
 

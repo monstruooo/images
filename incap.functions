@@ -21,120 +21,26 @@ function incap_find_site_by_origin ()
     fi
 }
 
-function incap_pwd () {
-	echo incapsula://
-}
-
-# "Block URLs\t"+ 			(.security.acls.rules[].urls[].value),
-
-incap_site_summary () {
-cat /dev/stdin |
-jq -r '
-"Site Name"
-	+"\t"+
-		.domain?,
-
-"Site Status"
-	+"\t"+
-		.status,
-
-"Account ID"
-	+"\t"+
-		(.account_id|tostring),
-
-"Cache Mode"
-	+"\t"+
-		.performance_configuration.acceleration_level?,
-
-"Block URLs"
-	+"\t"+
-		(.security.acls.rules[]|select(.id=="api.acl.blacklisted_urls")|[ .urls[].value ] | join(",") ),
-
-"SSL CA"
-	+"\t"+
-		.ssl.generated_certificate.ca,
-
-"SSL San"
-	+"\t"+
-		(.ssl.generated_certificate.san | join(",")),
-
-"SSL Detection"
-	+"\t"+
-		(.ssl.origin_server.detected | tostring),
-
-"SSL Detection Status"
-	+"\t"+
-		.ssl.origin_server.detectionStatus,
-
-"SSL Validation Status"
-	+"\t"+
-		.ssl.generated_certificate.validation_status,
-
-"DNS CNAME Record"
-	+"\t"+
-		({ dns: [(.dns[] | select(.set_type_to=="CNAME"))? ]} |
-		if .[] | length == 1 then .dns[0].set_data_to | join(",") else "N/A" end ),
-
-"DNS A Records"
-	+"\t"+
-		({ dns: [(.dns[] | select(.set_type_to=="A"))? ]} |
-		if .[] | length == 1 then .dns[0].set_data_to | join(",") else "N/A" end )
-	' | {
-local IFS=$'\t' ;
-while read name value ; do 
-	printf "%-22s = " $name ;
-	echo $value ;
-done ; }
-}
-
-function incap_site_to_cols () {
-local flow='
-	{ 
-	echo ... ;
-	cat stdin ... |
-	jq ...
-	jq continues ; 
-	} | {
-	while read ... 
-	}
-	{} groups output of commands for pipe input/output'
-
-	{ 
-echo -e "Site Id\tSite Name\tAccount\tIPs\tCNAME\tA Records" ;
-
-/bin/cat /dev/stdin |
-jq -r '
-(.site_id|tostring) 
-	+ "\t" +
-(.domain | .[0:33])
-	+ "\t" +
-(.account_id|tostring) 
-	+ "\t" +
-(.ips|join(",") | .[0:33] )
-	+ "\t" +
-({ dns: [(.dns[]|select(.set_type_to=="CNAME"))? ]} | if .[]|length==1 then .dns[0].set_data_to|join(",") else "N/A" end )
-	+ "\t" +
-({ dns: [(.dns[]|select(.set_type_to=="A"))? ]} | if .[]|length==1 then .dns[0].set_data_to|join(",") else "N/A" end )' ; # end jq -r
-	} | 
-	column -x -t -s$'\t'
-}
-
 function incap_site () {
 local usage='
-	incap site add domain=test.com ip=1.2.3.4 account=123456'
+	incap site add domain=test.com set_ip=1.2.3.4 account_id=123456'
 case $1 in
 	add)
 		shift 
-		local domain account ip api_args res
+		local domain account_id site_ip site_id api_args res
 		args_to_vars "$@"
-		api_args="site_ip=$ip&domain=${domain}&account_id=${account}&&send_site_setup_emails=false&force_ssl=true"
+		api_args="site_ip=$site_ip&domain=${domain}&account_id=${account_id}&send_site_setup_emails=false&force_ssl=true"
 		if res=$(incapsula_api "$api_args" https://my.incapsula.com/api/prov/v1/sites/add)
 		then
-		    id=$( jq -n -r "${res:-None} | .site_id")
+		    site_id=$( jq -n -r "${res:-None} | .site_id")
+			echo -n "Setting ignore_ssl to read the incapdns record: "
+			incapsula_api "site_id=${site_id}&param=ignore_ssl&value=true" prov/v1/sites/configure | $jq .res_message
 		else
 		    echo Failed to create site
 		    return 1
 		fi
+		res=$( incapsula_site_status $site_id)
+		echo '{ "sites" : [ '"$res"' ]}' > $incap_work_dir/accounts/incapsula_conf_${account_id}_${site_id}
 	;;
 esac
 
