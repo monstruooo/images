@@ -108,7 +108,7 @@ local bash_syntax='
 		Finds files modified less than 3 minutes ago
 	find -mmin -0
 		Never finds anything'
-if ! /bin/cat $dmn_cache | is_json || ( [[ -n $dnsme_autorefresh ]] && find $dmn_cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ) ; then
+if ! /bin/cat $dmn_cache 2>/dev/zero | is_json || ( [[ -n $dnsme_autorefresh ]] && find $dmn_cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ) ; then
 	dnsme_api $id/records  > $dmn_cache
 fi
 jq . $dmn_cache
