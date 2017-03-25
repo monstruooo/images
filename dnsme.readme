@@ -14,7 +14,7 @@ Type "dnsme ll" and press Enter . You should see "test-abc.com" listed together 
 Domain Id  Domain name
 877324     test-abc.com
 
-Run command "dnsme cc test-abc.com". 
+Run command "dnsme cd test-abc.com". 
 
 The prompt changes to dnsme://test-abc.com:877324 (You will see a different number. This is the Id of the domain "test-abc.com")
 
@@ -60,7 +60,7 @@ Run "dnsme ll" again and see that the record was deleted.
 "dnsme dl" can delete several records, if you run it as "dnsme dl <record1 id> <record2 id> etc"
 
 Other commands you can use:
-js
+cat
 pwd
 set 
 updatedb

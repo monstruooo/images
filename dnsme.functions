@@ -25,15 +25,6 @@ args_to_vars "$@"
 dnsme_api $id -X DELETE -d "[$id]"
 }
 
-function dnsme_domains_ls () {
-	{
-	echo -e "Domain Id \t Domain name" ;
-	dnsme get |
-	jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + " \t " + .name' ;
-	} | 
-	column -x -t -s $'\t'
-}
-
 function dnsme_record_rm () {
 local domain domain_id ids 
 args_to_vars "$@"

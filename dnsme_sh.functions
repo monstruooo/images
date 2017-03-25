@@ -18,7 +18,7 @@ echo https://cp.dnsmadeeasy.com/dns/managed/$dnsme_dmn_id
 }
 
 function dnsme_mount () {
-local alias="cc pwd context ll js mk dl updatedb purge" cmd
+local alias="cd pwd context ll cat mk rm updatedb purge set" cmd
 if [[ -n $dnsme_ps1_saved ]] ; then
 	PS1="$dnsme_ps1_saved"
 	unset dnsme_ps1_saved
@@ -26,10 +26,12 @@ if [[ -n $dnsme_ps1_saved ]] ; then
 	for cmd in $alias ; do
 		unalias $cmd
 	done
+	eval "$dnsme_alias_saved"
 	echo dnsme mount OFF
 else
 	[[ x$2 == x[Oo][Ff][Ff] ]] && { echo dnsme $1 OFF ; return ; }
 	dnsme_ps1_saved="$PS1"
+	dnsme_alias_saved=$(alias)
 	PS1='$(dnsme pwd) ]$ '
 
 	for cmd in $alias ; do
@@ -49,7 +51,7 @@ function dnsme_set() {
 EOF
 } # end function 
 
-function dnsme_js () {
+function dnsme_cat () {
 case $(dnsme_context) in
 root)
 	if [[ -n $1 ]] ; then
@@ -89,7 +91,7 @@ root)
 		dnsme get $1 | dnsme_records_table
 	else  
 	# dnsme:// dnsme ll
-		dnsme_domains_ls
+		dnsme_domains_ll
 	fi
 ;;
 domain)
@@ -138,7 +140,7 @@ if [[ x$? == x0 ]] && dnsme_autoupdate ; then
 fi
 } # end function dnsme_mk
 
-function dnsme_dl () {
+function dnsme_rm () {
 local name id
 if [[ -z $dnsme_dmn ]] ; then
 	read -r name id < <(dnsme_domain_id $1)
@@ -162,7 +164,7 @@ fi
 echo 
 } # end function dnsme_pwd
 
-function dnsme_cc () {
+function dnsme_cd () {
 if [[ -z $1 || x$1 == x/ ]] ; then 
 	unset dnsme_dmn dnsme_dmn_id
 else 

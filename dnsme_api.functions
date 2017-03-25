@@ -118,12 +118,20 @@ function dnsme_domain_id () { local domain_name=$1 domain_id
     dnsme_get | jq -e -j '.data[] | select(.name=="'$1'" or (.id|tostring)=="'$1'") | .name , " " , .id' 
 } # end function
 
+function dnsme_domains_ll () {
+	{
+	echo -e "Domain Id \t Domain name" ;
+	dnsme get |
+	jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + " \t " + .name' ;
+	} | 
+	column -x -t -s $'\t'
+}
 
 function dnsme_purge () {
 # purge deleted domains
 local domains cached_domains
-domains=$( dnsme cc ; dnsme ll | awk '{print $2}' | sed 1d )
+domains=$( dnsme cd ; dnsme ll | awk '{print $2}' | sed 1d )
 cached_domains=$( find $dnsme_tmp_dir/* | egrep -v 'all.domains|res')
 diff -Bb -y <(echo "$cached_domains") <( echo "$domains") --suppress-common-lines | 
-egrep '<$' | awk '{print "'$dnsme_tmp_dir'/" $1}' | xargs rm -fv
+egrep '<$' | awk '{print "'$dnsme_tmp_dir'/" $1}' | xargs /bin/rm -fv
 }
