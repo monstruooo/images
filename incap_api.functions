@@ -18,10 +18,7 @@ done
 } # end function
 
 function incap_site_id () {
-incap_conf  | 
-	jq -e -c -j '{ domain , site_id , cname:(.dns[] | select(.set_type_to=="CNAME") | .set_data_to[]) } |
-select(.cname=="'$1'" or (.site_id|tostring)=="'$1'" or .domain=="'$1'") | 
-.site_id , " \t " , .domain , " \t " , .cname , "\n" '
+incap ls sites  | awk -v OFS=$'\t' '{print $1,$2,$5}' | egrep -w "$1"
 } # end function 
 
 function incap_site2disk () {
@@ -56,9 +53,7 @@ if [[ -z $1 ]] ; then
 	return
 fi
 
-find $sites_dir -regex '.+_[0-9]+$' -exec cat {} \; |
-	jq -e -c  '(.dns[] | select(.set_type_to=="CNAME") | .set_data_to[]) as $cname |
-	select($cname=="'$1'" or (.site_id|tostring)=="'$1'" or .domain=="'$1'")' 
+find $sites_dir -regextype posix-extended -regex "/\S+/(${1}_[0-9]+|\S+_${1})$" -exec cat {} \; 
 }
 
 function incap_updatedb () {
@@ -172,6 +167,7 @@ else
 	select((.account_id|tostring) == "'"$1"'" or (.ips|inside(["'"$1"'"])) )
 end ' | 
 incap_site_to_cols
+#  egrep -w -e "^(\S+\s+){2}${1}" -e "^(\S+\s+){3}${1}" # by account_id or origin
 } # end function
 
 function incap_accounts_ll () {

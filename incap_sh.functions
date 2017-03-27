@@ -120,6 +120,19 @@ elif [[ x$1 == xsites ]] ; then
 		incap_sites_ll
 	fi
 	return
+elif [[ x$1 == xorigins ]] ; then
+	shift
+	if [[ -n $1 ]] ; then
+		{ echo -e "Site Id \t Site Name \t IPs" ;
+		incap_sites_js | 
+			jq -j -r 'select(.ips|inside(["'"$1"'"])) | .site_id, " \t " , .domain , " \t " , (.ips|join(",")) , "\n"' ;
+		} | tabs2cols
+	else
+		{ echo -e "Origin \t Number of Sites" ;
+		incap_sites_js | jq -r '.ips[]' | tr A-Z a-z | sort | uniq -c | sort -r -n -k 1 | awk '{print $2 " \t " $1}' ; } |
+		tabs2cols
+	fi
+	return
 fi
 
 case $(incap_context) in
@@ -150,7 +163,9 @@ case $(incap_context) in
 	;;
 	sites)
 		if [[ -n $1 ]] ; then
-			incap_site_status $1 | incap_site_summary
+			read -r id name cname < <(incap_site_id $1)
+			[[ -z $id ]] && return 1
+			incap_site_status $id | incap_site_summary
 		else
 			incap_sites_ll
 		fi
