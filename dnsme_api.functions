@@ -124,7 +124,7 @@ function dnsme_domains_ll () {
 	dnsme get |
 	jq -r ' .data | sort_by("name") | .[] | (.id |tostring) + " \t " + .name' ;
 	} | 
-	column -x -t -s $'\t'
+	tabs2cols
 }
 
 function dnsme_purge () {

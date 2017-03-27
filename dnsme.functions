@@ -16,7 +16,7 @@ jq -r '.data | sort_by(.type) | .[] |
 	+ " \t " + 
 .value' ; 
 	} | 
-column -t -x -s $'\t'
+tabs2cols
 } # end function
 
 function dnsme_domain_rm () {

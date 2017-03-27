@@ -183,7 +183,7 @@ function incap_accounts_ll () {
 	end |
 	(.account_id|tostring) + " \t " + .account_name' ;
 	} |
-	column -x -t -s$'\t'
+	tabs2cols
 }
 
 incap_site_status ()

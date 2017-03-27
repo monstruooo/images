@@ -240,7 +240,7 @@ jq -r '
 		({ dns: [(.dns[] | select(.set_type_to=="A"))? ]} |
 		if .[] | length == 1 then .dns[0].set_data_to | join(",") else "N/A" end )
 	' | 
-	column -x -t -s$'\t'
+	tabs2cols
 }
 
 function incap_site_to_cols () {
@@ -270,7 +270,7 @@ jq -r '
 	+ "\t" +
 ({ dns: [(.dns[]|select(.set_type_to=="CNAME"))? ]} | if .[]|length==1 then .dns[0].set_data_to|join(",") else "N/A" end )' ; # end jq -r
 	} | 
-	column -x -t -s$'\t'
+	tabs2cols
 }
 
 
