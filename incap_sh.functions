@@ -1,12 +1,18 @@
 #!/bin/bash
 
-incap_tmp_dir=/dev/shm/$USER/tmp/incapsula
-
 function incap_cfg () {
 [[ -z $incap_api_id ]] && read -s "API Key: " incap_api_id
 [[ -z $incap_api_key ]] && read -s "API Key: " incap_api_id
 }
 
+function incap_set () {
+cat << EOF
+Incapsula tmp dir
+Incapsula context
+incapsula ID
+Incapsula Name
+EOF
+}
 
 function incap_mount () {
 local alias="cc pwd context ll js mk dl updatedb set_ip purge" cmd
@@ -109,7 +115,7 @@ if [[ x$1 == xaccounts ]] ; then
 elif [[ x$1 == xsites ]] ; then
 	if [[ -n $2 ]] ; then
 		shift
-		incapsula_site_status $1 | incap_site_summary
+		incap_site_status $1 | incap_site_summary
 	else
 		incap_sites_ll
 	fi
@@ -144,77 +150,20 @@ case $(incap_context) in
 	;;
 	sites)
 		if [[ -n $1 ]] ; then
-			incapsula_site_status $1 | incap_site_summary
+			incap_site_status $1 | incap_site_summary
 		else
 			incap_sites_ll
 		fi
 	;;
 	account)
 		if [[ -n $1 ]] ; then
-			incapsula_site_status $1 | incap_site_summary
+			incap_site_status $1 | incap_site_summary
 		else
 			incap_sites_ll $incap_path_id
 		fi
 	;;
 	site)
-			incapsula_site_status $incap_path_id | json2bash
-	;;
-esac
-}
-
-function incap_set_ip () { 
-local usage='
-	incap set_ip <ip|hostname>'
-
-if [[ -z $1 ]] ; then
-	echo Usage: "$usage" 1>&2
-	return 1
-elif [[ ! x$(incap context) == xsite ]] ; then
-	echo You should cc to the site you want to change IP to 1>&2
-	return 1
-fi
-	
-local old_ips
-old_ips=$(incapsula_site_status $incap_path_id | jq '.ips')
-incapsula_api "site_id=$incap_path_id&param=site_ip&value=$1" prov/v1/sites/configure | 
-jq '.|={site_id , domain , new_ips: .ips} | .old_ips='"$old_ips"
-} # end function
-
-function incap_mk () {
-local usage='
-	incap mk <site name> <dest ip/hostname>'
-
-	if [[ ! x$(incap_context) == xaccount ]] ; then
-		echo Change to the account the site should be created in 1>&2
-		return 1
-	elif [[ -z $1 || -z $2 ]] ; then
-		echo Usage:"$usage"
-		return 2
-	fi
-		
-	incap site add account_id=$incap_path_id domain=$1 site_ip=$2
-}
-
-function incap_purge () {
-local usage='
-	purge cache
-	purge hostname cache'
-
-if [[ ! x$(incap context) == xsite ]] ; then
-	echo You should cc to site you want to purge 1>&2
-	return 1
-fi
-case "$1 $2" in
-	"cache ")
-		echo Purging site $incap_path_name cache...
-		incapsula_api site_id=${incap_path_id} prov/v1/sites/cache/purge | jq .
-	;;
-	"hostname cache")
-		echo Purging $incap_path_name from hostname cache. This operation may take a few seconds...
-		incapsula_api host_name=${incap_path_name} prov/v1/sites/hostname/purge | jq .
-	;;
-	*)
-		echo Usage: "$usage" 1>&2
+			incap_site_status $incap_path_id | json2bash
 	;;
 esac
 }

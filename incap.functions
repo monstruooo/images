@@ -5,7 +5,7 @@ function incap_examples () {
 # Turning rules[] from array to object with objects. 
 # You can then extract rules like this: jq '.rules["api.acl.blacklisted_countries"]'
 
-incapsula_site_status 101578098  | jq '.security.acls.rules[] | { (.id): .|del(.id) }' | jq -s 'add | { rules: . }'
+incap_site_status 101578098  | jq '.security.acls.rules[] | { (.id): .|del(.id) }' | jq -s 'add | { rules: . }'
 
 }
 
@@ -30,6 +30,7 @@ case $1 in
 		local domain account_id site_ip site_id api_args res
 		args_to_vars "$@"
 		api_args="site_ip=$site_ip&domain=${domain}&account_id=${account_id}&send_site_setup_emails=false&force_ssl=true"
+		echo Creating site $domain
 		if res=$(incapsula_api "$api_args" https://my.incapsula.com/api/prov/v1/sites/add)
 		then
 		    site_id=$( jq -n -r "${res:-None} | .site_id")
@@ -39,7 +40,7 @@ case $1 in
 		    echo Failed to create site
 		    return 1
 		fi
-		res=$( incapsula_site_status $site_id)
+		res=$( incap_site_status $site_id)
 		echo '{ "sites" : [ '"$res"' ]}' > $incap_work_dir/accounts/incapsula_conf_${account_id}_${site_id}
 	;;
 esac
@@ -67,3 +68,77 @@ incapsula_api "site_id=$site_id&param=domain_validation&value=email" prov/v1/sit
 	jq -r '"", { domain, status, statusEnum, ssl, res, res_message, debug_info }'
 
 } # end function incap_ssl_by_email
+
+function incap_purge () {
+local usage='
+	purge site cache <site id>
+	purge hostname cache <site Name>'
+
+case "$1 $2" in
+	"site cache")
+		local site_id
+		if [[ -n $3 ]] ; then
+			site_id=$3
+		elif [[ x$(incap context) == xsite ]] ; then
+			site_id=$incap_path_id
+		else
+			echo You need to be either inside the site or provide its site id 1>&2
+			return 1
+		fi
+		echo Purging site $site_id cache...
+		incapsula_api site_id=$site_id prov/v1/sites/cache/purge | jq .
+	;;
+	"hostname cache")
+		local host_name
+		if [[ -n $3 ]] ; then
+			host_name=$3
+		elif [[ x$(incap context) == xsite ]] ; then
+			host_name=$incap_path_id
+		else
+			echo You need to be either inside the site or provide its site id 1>&2
+			return 1
+		fi
+		echo Purging $host_name from hostname cache. This operation may take a few seconds...
+		incapsula_api host_name=$host_name prov/v1/sites/hostname/purge | jq .
+	;;
+	*)
+		echo Usage: "$usage" 1>&2
+	;;
+esac
+}
+
+function incap_set_ip () { 
+local usage='
+	incap set_ip <ip|hostname>'
+
+if [[ -z $1 ]] ; then
+	echo Usage: "$usage" 1>&2
+	return 1
+elif [[ ! x$(incap context) == xsite ]] ; then
+	echo You should cc to the site you want to change IP to 1>&2
+	return 1
+fi
+	
+local old_ips res
+old_ips=$(incap_site_status $incap_path_id | jq '.ips')
+res=$( incapsula_api "site_id=$incap_path_id&param=site_ip&value=$1" prov/v1/sites/configure ) || return 
+echo $res | jq '.|={site_id , domain , new_ips: .ips} | .old_ips='"$old_ips"
+echo $res | incap_site2disk
+} # end function
+
+function incap_mk () {
+local usage='
+	incap mk <site name> <dest ip/hostname>'
+
+	if [[ ! x$(incap_context) == xaccount ]] ; then
+		echo Change to the account the site should be created in 1>&2
+		return 1
+	elif [[ -z $1 || -z $2 ]] ; then
+		echo Usage:"$usage"
+		return 2
+	fi
+		
+	incap site add account_id=$incap_path_id domain=$1 site_ip=$2
+}
+
+

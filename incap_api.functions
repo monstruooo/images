@@ -1,5 +1,7 @@
 #!/bin/bash
 
+incap_tmp_dir=/dev/shm/$USER/tmp/incapsula
+
 function incap_page_to_sites () {
 local info='
 	Accepts a page of sites list of incapsula account in a pipe
@@ -16,25 +18,155 @@ done
 } # end function
 
 function incap_site_id () {
-incapsula_conf_print  | 
-	jq -e -c -j '.sites[] |
-{ domain , site_id , cname:(.dns[] | select(.set_type_to=="CNAME") | .set_data_to[]) } |
+incap_conf  | 
+	jq -e -c -j '{ domain , site_id , cname:(.dns[] | select(.set_type_to=="CNAME") | .set_data_to[]) } |
 select(.cname=="'$1'" or (.site_id|tostring)=="'$1'" or .domain=="'$1'") | 
-.site_id,
-" \t ",
-.domain,
-" \t ",
-.cname,
-"\n" '
+.site_id , " \t " , .domain , " \t " , .cname , "\n" '
 } # end function 
+
+function incap_site2disk () {
+local sites_dir=$incap_work_dir/sites domain site_id json
+mkdir -p $sites_dir
+cat /dev/stdin |
+jq -c -j '.domain , " " , .site_id , " " , . , "\n"' |
+while read -r domain site_id json ; do
+	echo $json >  $sites_dir/${domain}_${site_id}
+done
+} # end function
+
+function incap_sites_js () {  
+
+local accounts_dir=$incap_work_dir/accounts 
+local sites_dir=$incap_work_dir/sites
+mkdir -p $accounts_dir $sites_dir 
+
+local last_update=$sites_dir/last_update
+if [[ ! -f $last_update ]] || find $accounts_dir/incapsula_conf_[0-9]* -newer $last_update  | egrep -q '\S+'
+then
+	rm -f $sites_dir/* ; touch $last_update
+	jq -n '{ message: "Exploding Incapsula configuration. Can take some seconds" , source: "Oskar" }'
+	for page in $accounts_dir/incapsula_conf_[0-9]* ; do
+		cat $page |
+		jq .sites[] |
+		incap_site2disk
+	done
+fi
+if [[ -z $1 ]] ; then
+	find $sites_dir -regex '.+_[0-9]+$' -exec cat {} \;
+	return
+fi
+
+find $sites_dir -regex '.+_[0-9]+$' -exec cat {} \; |
+	jq -e -c  '(.dns[] | select(.set_type_to=="CNAME") | .set_data_to[]) as $cname |
+	select($cname=="'$1'" or (.site_id|tostring)=="'$1'" or .domain=="'$1'")' 
+}
+
+function incap_updatedb () {
+local account_id 
+local acct_dir=$incap_work_dir/accounts sites_dir=$incap_work_dir/sites
+mkdir -p $acct_dir $sites_dir
+local account accounts accounts2 request requests p
+
+if [[ -n $1 ]] ; then
+	accounts="$*"
+	for account in $accounts ; do 
+		rm -f $acct_dir/incapsula_conf_${account}*
+	done
+else
+	accounts=$(incapsula_account_list |	jq -r '.accounts[] | .account_id')
+	rm -f $acct_dir/incapsula_conf_[0-9]*
+fi
+accounts=" "$(echo $accounts)" " # echo and spaces to allow removing finished accounts as / $account / /
+accounts2=$accounts
+
+local page= limit=3 page_size=100 exit_code=0
+export page 
+
+while true ; do 
+	local count=$(echo $accounts| wc -w)
+	if (( count == 0 )) ; then
+		break
+	elif (( count >= limit )) ; then
+		hop_pages=1
+	elif (( count < limit )) ; then
+		hop_pages=$((limit/count))
+		echo $((limit%count)) | egrep -q ^0 || ((hop_pages++))
+	fi
+
+	local requests=
+	for ((i=1;i<=hop_pages;i++)) ; do
+		[[ -z $page ]] && page=0 || ((page++))
+		for account in $accounts ; do
+			requests="$requests $account:$page"
+		done
+	done
+
+	echo Accounts: $accounts | egrep --color '.*'
+
+	echo $requests
+	for request in $requests ; do
+
+		# The problem is unset doesn't affect the current loop thru the array
+		# This break was relevant before the last changes. Leaving it in case I go to the old method
+		# (( ${#accounts[@]} == 0 )) && break
+		echo $accounts| wc -w | egrep -q ^0 && break
+            account=${request%:*} p=${request#*:};
+            printf 'Account: %-6s Page: %-3s\n' $account $p | egrep --color '.*';
+            file=$acct_dir/incapsula_conf_${account}_${p};
+            incapsula_api "account_id=${account}&page_size=${page_size}&page_num=$p" prov/v1/sites/list > $file & while true; do
+                local jobs;
+                jobs=$(jobs -l | grep -o 'incapsula_api.*' | wc -l) || continue;
+                (( jobs < limit )) && break;
+                sleep .2;
+            done;
+        done;
+        local logic='You need to wait for jq to finish before you can count sites';
+        wait;
+        for account in $accounts;
+        do
+            debug="Page = $page";
+            file=$acct_dir/incapsula_conf_${account}_${page};
+            res=$( jq -r .res $file);
+            if (( res != 0 )); then
+                exit_code=$res;
+            fi;
+            count=$( grep -o site_id $file | wc -l );
+            if (( count < page_size )); then
+                echo account $account finished. The last page count is $count in $file;
+                accounts=${accounts/ ${account} / };
+            fi;
+            if (( count == 0 )); then
+                rm -f $file;
+            fi;
+        done;
+    done;
+    for account in $accounts2;
+    do
+        echo;
+        echo $account;
+        for file in $acct_dir/incapsula_conf_${account}_[0-9];
+        do
+            printf '%-11s%-5s%-3s%-3s\n' $( cat $file |
+                jq -r \"${file#*conf_}'" + .page + " " +(.sites|length|tostring) + " " + (.res|tostring) + " " + .res_message');
+        done;
+    done;
+    echo;
+    echo Duplicate sites:;
+    jq -r .sites[].domain $acct_dir/incapsula_conf_[0-9]* | sort -V | uniq -d | egrep --color '.*' || echo No duplicate sites detected;
+    if [[ x$exit_code != x0 ]]; then
+        echo -e "\nAt least one page failed with error\n" | egrep --color '.*';
+        return $exit_code;
+    else
+        echo -e "\nSuccessfully finished downloading all Incapsula site reports\n";
+    fi
+}
 
 function incap_sites_ll () {
 local info='
 	you can both list all sites or filter them by origin ip or the account'
 
-incapsula_conf_print |
-jq -e '.sites[] |
-if "'"$1"'" == "" then
+incap_sites_js |
+jq -e ' if "'"$1"'" == "" then
 	.
 else
 	select((.account_id|tostring) == "'"$1"'" or (.ips|inside(["'"$1"'"])) )
@@ -58,4 +190,9 @@ function incap_accounts_ll () {
 	column -x -t -s$'\t'
 }
 
+incap_site_status ()
+{
+    local incapsula_site_id=$1;
+    incapsula_api "site_id=${incapsula_site_id}" prov/v1/sites/status
+}
 

@@ -1,5 +1,9 @@
 #!/bin/bash
 
+function tabs2cols() {
+cat /dev/stdin | column -x -t -s$'\t'
+}
+
 function read_nl () { 
 readme='add new line to read -n 1 unless Enter pressed (which adds new line)'
 [[ -z $REPLY ]] || echo
