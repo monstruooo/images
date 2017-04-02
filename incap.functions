@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 function incap_examples () {
 # Turning rules[] from array to object with objects. 
 # You can then extract rules like this: jq '.rules["api.acl.blacklisted_countries"]'
@@ -9,42 +8,22 @@ incap_site_status 101578098  | jq '.security.acls.rules[] | { (.id): .|del(.id) 
 
 }
 
-function incap_find_lb_by_origin ()
-{
-    incapsula_conf_print | jq -r ' .sites[].ips[]' | tr A-Z a-z | sort | uniq -c | sort -n -k 1 | grep ".*$1";
-}
+incap_site_add () {
 
-function incap_find_site_by_origin ()
-{
-    if [[ -n $1 ]]; then
-        incapsula_conf_print | jq -r ' .sites[] | select(.ips[] | capture("'$1'";"i"))| .domain ' | sort -V
-    fi
-}
-
-function incap_site () {
-local usage='
-	incap site add domain=test.com set_ip=1.2.3.4 account_id=123456'
-case $1 in
-	add)
-		shift 
-		local domain account_id site_ip site_id api_args res
-		args_to_vars "$@"
-		api_args="site_ip=$site_ip&domain=${domain}&account_id=${account_id}&send_site_setup_emails=false&force_ssl=true"
-		echo Creating site $domain
-		if res=$(incapsula_api "$api_args" https://my.incapsula.com/api/prov/v1/sites/add)
-		then
-		    site_id=$( jq -n -r "${res:-None} | .site_id")
-			echo -n "Setting ignore_ssl to read the incapdns record: "
-			incapsula_api "site_id=${site_id}&param=ignore_ssl&value=true" prov/v1/sites/configure | $jq .res_message
-		else
-		    echo Failed to create site
-		    return 1
-		fi
-		res=$( incap_site_status $site_id)
-		echo '{ "sites" : [ '"$res"' ]}' > $incap_work_dir/accounts/incapsula_conf_${account_id}_${site_id}
-	;;
-esac
-
+	local account_id=$1 domain=$2 site_ip=$3 site_id api_args res
+	
+	api_args="site_ip=$site_ip&domain=${domain}&account_id=${account_id}&send_site_setup_emails=false&force_ssl=true"
+	echo Creating site $domain
+	if res=$(incap_api "$api_args" https://my.incapsula.com/api/prov/v1/sites/add)
+	then
+	    site_id=$( incap_site_id $domain)
+		echo -n "Setting ignore_ssl to read the incapdns record: "
+		res=$(incap_api "site_id=${site_id}&param=ignore_ssl&value=true" api/prov/v1/sites/configure)
+		echo $res | $jq .res_message
+	else
+	    echo Failed to create site
+	    return 1
+	fi
 }
 
 function incap_ssl_by_email () {
@@ -52,7 +31,7 @@ function incap_ssl_by_email () {
 [[ -z $1 ]] && { return || exit ;  }
 site_id=$(incapsula_site_id_from_name $1)
 
-incapsula_api "site_id=$site_id&domain=$1" prov/v1/domain/emails | 
+incap_api "site_id=$site_id&domain=$1" api/prov/v1/domain/emails | 
 	jq -r '"\nApprover emails '$1':\n" , .domain_emails[] + "\n"'
 
 echo Press Enter to skip
@@ -62,44 +41,26 @@ read -p "Validation Email: " ssl_email
 	{ return || exit ; }
 
     {
-incapsula_api "site_id=$site_id&param=approver&value=$ssl_email" prov/v1/sites/configure ;
-incapsula_api "site_id=$site_id&param=domain_validation&value=email" prov/v1/sites/configure ;
+incap_api "site_id=$site_id&param=approver&value=$ssl_email" api/prov/v1/sites/configure ;
+incap_api "site_id=$site_id&param=domain_validation&value=email" api/prov/v1/sites/configure ;
     } |
 	jq -r '"", { domain, status, statusEnum, ssl, res, res_message, debug_info }'
 
 } # end function incap_ssl_by_email
 
-function incap_purge () {
+function incap_site_purge () {
 local usage='
-	purge site cache <site id>
-	purge hostname cache <site Name>'
+	purge cache <site id>
+	purge hostname <site name>'
 
-case "$1 $2" in
-	"site cache")
-		local site_id
-		if [[ -n $3 ]] ; then
-			site_id=$3
-		elif [[ x$(incap context) == xsite ]] ; then
-			site_id=$incap_path_id
-		else
-			echo You need to be either inside the site or provide its site id 1>&2
-			return 1
-		fi
-		echo Purging site $site_id cache...
-		incapsula_api site_id=$site_id prov/v1/sites/cache/purge | jq .
+case $1 in
+	cache)
+		echo Purging site $2 cache...
+		incap_api site_id=$2 api/prov/v1/sites/cache/purge | jq .
 	;;
-	"hostname cache")
-		local host_name
-		if [[ -n $3 ]] ; then
-			host_name=$3
-		elif [[ x$(incap context) == xsite ]] ; then
-			host_name=$incap_path_id
-		else
-			echo You need to be either inside the site or provide its site id 1>&2
-			return 1
-		fi
-		echo Purging $host_name from hostname cache. This operation may take a few seconds...
-		incapsula_api host_name=$host_name prov/v1/sites/hostname/purge | jq .
+	hostname)
+		echo Purging $3 from hostname cache...
+		incap_api host_name=$2 api/prov/v1/sites/hostname/purge | jq .
 	;;
 	*)
 		echo Usage: "$usage" 1>&2
@@ -107,38 +68,29 @@ case "$1 $2" in
 esac
 }
 
-function incap_set_ip () { 
-local usage='
-	incap set_ip <ip|hostname>'
+function incap_ddos_threshold () {
+local id=$1 ddos_threshold=$2 data
+[[ -z $2 ]] && return 1
+data="site_id=${id}&rule_id=api.threats.ddos&activation_mode=api.threats.ddos.activation_mode.auto&ddos_traffic_threshold=${ddos_threshold}"
+if res=$(incap_api "$data" api/prov/v1/sites/configure/security)
+then
+	echo $res | jq '.security.waf.rules[] |  select(.id=="api.threats.ddos")'
+fi
+}
 
-if [[ -z $1 ]] ; then
+function incap_site_ip () { 
+local usage='
+	incap site ip <site_id> <ip|hostname>'
+
+if [[ -z $2 ]] ; then
 	echo Usage: "$usage" 1>&2
 	return 1
-elif [[ ! x$(incap context) == xsite ]] ; then
-	echo You should cc to the site you want to change IP to 1>&2
-	return 1
+else
+	local id=$1 ip=$2
 fi
 	
 local old_ips res
-old_ips=$(incap_site_status $incap_path_id | jq '.ips')
-res=$( incapsula_api "site_id=$incap_path_id&param=site_ip&value=$1" prov/v1/sites/configure ) || return 
+old_ips=$(incap_site_status $id | jq '.ips')
+res=$( incap_api "site_id=$id&param=site_ip&value=$ip" api/prov/v1/sites/configure ) || return 
 echo $res | jq '.|={site_id , domain , new_ips: .ips} | .old_ips='"$old_ips"
-echo $res | incap_site2disk
 } # end function
-
-function incap_mk () {
-local usage='
-	incap mk <site name> <dest ip/hostname>'
-
-	if [[ ! x$(incap_context) == xaccount ]] ; then
-		echo Change to the account the site should be created in 1>&2
-		return 1
-	elif [[ -z $1 || -z $2 ]] ; then
-		echo Usage:"$usage"
-		return 2
-	fi
-		
-	incap site add account_id=$incap_path_id domain=$1 site_ip=$2
-}
-
-

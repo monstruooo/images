@@ -1,28 +1,48 @@
 #!/bin/bash
 
-incap_tmp_dir=/dev/shm/$USER/tmp/incapsula
-
-function incap_page_to_sites () {
-local info='
-	Accepts a page of sites list of incapsula account in a pipe
-	and expands it into separate per-site json files'
-
-local wdir=/dev/shm/$USER/tmp/incap/sites
-mkdir $wdir
-cat /dev/stdin |
-jq -c -j '.sites[] | .domain , " " , .site_id , " " , . , "\n"' |
-while read -r domain site_id json ; do
-    file=$wdir/${domain}_${site_id}
-    echo $json > $file
-done
-} # end function
-
 function incap_site_id () {
-incap ls sites  | awk -v OFS=$'\t' '{print $1,$2,$5}' | egrep -w "$1"
+[[ -z $1 ]] && return 1
+local site_id domain=$1
+mapfile site_id < <(incap js sites $domain | jq .site_id )
+
+case ${#site_id[@]} in
+	1)
+        echo $site_id
+		;;
+	0)
+		jq -n '{ res: { code: 1 , message: "Site '$domain' not found" , domain: "'$domain'" , source: "Oskar" } }' 1>&2
+        return 1
+		;;
+	*)
+		jq -n '{ res: { code: 2 , message: "Duplicate sites" , domain: "'$domain'" , source: "Oskar" } }' 1>&2
+		return 2
+		;;
+esac
 } # end function 
 
+function incap_api () {
+local res data="$1" api_uri="$2" api_url=https://my.incapsula.com
+api_uri=${api_uri/$api_url\//}  # in case the string contains the whole url path
+
+res=$( curl -k -S -s --data "api_id=${incap_api_id}&api_key=${incap_api_key}&${data}" $api_url/$api_uri ) ||
+return 1
+
+local res_code=$(jq -e .res <<< $res)
+if (( $res_code == 0 ))
+then
+	echo $res
+else
+	echo $res | jq . 1>&2
+	return $res_code
+fi
+
+echo $res | 
+jq -e  'if has("site_id") and has("domain") and has("site_creation_date") then . else empty end' >/dev/zero && echo $res | incap_site2disk
+
+}
+
 function incap_site2disk () {
-local sites_dir=$incap_work_dir/sites domain site_id json
+local domain site_id json
 mkdir -p $sites_dir
 cat /dev/stdin |
 jq -c -j '.domain , " " , .site_id , " " , . , "\n"' |
@@ -31,46 +51,34 @@ while read -r domain site_id json ; do
 done
 } # end function
 
-function incap_sites_js () {  
+function incap_js_sites () {  
 
-local accounts_dir=$incap_work_dir/accounts 
-local sites_dir=$incap_work_dir/sites
-mkdir -p $accounts_dir $sites_dir 
-
-local last_update=$sites_dir/last_update
-if [[ ! -f $last_update ]] || find $accounts_dir/incapsula_conf_[0-9]* -newer $last_update  | egrep -q '\S+'
+local last_update=$sites_dir/last_update file files
+if [[ ! -f $last_update ]] || find $accounts_dir/account_page-[0-9]* -newer $last_update  | egrep -q '\S+'
 then
 	rm -f $sites_dir/* ; touch $last_update
-	jq -n '{ message: "Exploding Incapsula configuration. Can take some seconds" , source: "Oskar" }'
-	for page in $accounts_dir/incapsula_conf_[0-9]* ; do
-		cat $page |
-		jq .sites[] |
-		incap_site2disk
-	done
+	jq -n '{ message: "Exploding Incapsula configuration. Can take some seconds" , source: "Oskar" }' 1>&2
+	files=$(incap ll files accounts)
+	[[ -z $files ]] && { echo No files found. Run incap updatedb ; return 1 ; }
+	for file in $files ; do
+		jq .sites[] $file | incap_site2disk &
+	done 
+	wait
 fi
 if [[ -z $1 ]] ; then
 	find $sites_dir -regex '.+_[0-9]+$' -exec cat {} \;
 	return
 fi
 
-find $sites_dir -regextype posix-extended -regex "/\S+/(${1}_[0-9]+|\S+_${1})$" -exec cat {} \; 
+incap ll files sites | egrep -e "/${1}_[0-9]+$" -e "/[^/]+_${1}$" | xargs cat
 }
 
 function incap_updatedb () {
 local account_id 
-local acct_dir=$incap_work_dir/accounts sites_dir=$incap_work_dir/sites
-mkdir -p $acct_dir $sites_dir
 local account accounts accounts2 request requests p
 
-if [[ -n $1 ]] ; then
-	accounts="$*"
-	for account in $accounts ; do 
-		rm -f $acct_dir/incapsula_conf_${account}*
-	done
-else
-	accounts=$(incapsula_account_list |	jq -r '.accounts[] | .account_id')
-	rm -f $acct_dir/incapsula_conf_[0-9]*
-fi
+accounts=$(incap ll accounts |	egrep -o '^[0-9]+')
+rm -f $accounts_dir/account_page-[0-9]*
 accounts=" "$(echo $accounts)" " # echo and spaces to allow removing finished accounts as / $account / /
 accounts2=$accounts
 
@@ -107,10 +115,10 @@ while true ; do
 		echo $accounts| wc -w | egrep -q ^0 && break
             account=${request%:*} p=${request#*:};
             printf 'Account: %-6s Page: %-3s\n' $account $p | egrep --color '.*';
-            file=$acct_dir/incapsula_conf_${account}_${p};
-            incapsula_api "account_id=${account}&page_size=${page_size}&page_num=$p" prov/v1/sites/list > $file & while true; do
+            file=$accounts_dir/account_page-${account}_${p};
+            incap_api "account_id=${account}&page_size=${page_size}&page_num=$p" api/prov/v1/sites/list > $file & while true; do
                 local jobs;
-                jobs=$(jobs -l | grep -o 'incapsula_api.*' | wc -l) || continue;
+                jobs=$(jobs -l | grep -o 'incap_api.*' | wc -l) || continue;
                 (( jobs < limit )) && break;
                 sleep .2;
             done;
@@ -120,7 +128,7 @@ while true ; do
         for account in $accounts;
         do
             debug="Page = $page";
-            file=$acct_dir/incapsula_conf_${account}_${page};
+            file=$accounts_dir/account_page-${account}_${page};
             res=$( jq -r .res $file);
             if (( res != 0 )); then
                 exit_code=$res;
@@ -139,7 +147,7 @@ while true ; do
     do
         echo;
         echo $account;
-        for file in $acct_dir/incapsula_conf_${account}_[0-9];
+        for file in $accounts_dir/account_page-${account}_[0-9];
         do
             printf '%-11s%-5s%-3s%-3s\n' $( cat $file |
                 jq -r \"${file#*conf_}'" + .page + " " +(.sites|length|tostring) + " " + (.res|tostring) + " " + .res_message');
@@ -147,7 +155,7 @@ while true ; do
     done;
     echo;
     echo Duplicate sites:;
-    jq -r .sites[].domain $acct_dir/incapsula_conf_[0-9]* | sort -V | uniq -d | egrep --color '.*' || echo No duplicate sites detected;
+    jq -r .sites[].domain $accounts_dir/account_page-[0-9]* | sort -V | uniq -d | egrep --color '.*' || echo No duplicate sites detected;
     if [[ x$exit_code != x0 ]]; then
         echo -e "\nAt least one page failed with error\n" | egrep --color '.*';
         return $exit_code;
@@ -156,24 +164,14 @@ while true ; do
     fi
 }
 
-function incap_sites_ll () {
-local info='
-	you can both list all sites or filter them by origin ip or the account'
+function incap_js_accounts () {
+	incap_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list
+}
 
-incap_sites_js |
-jq -e ' if "'"$1"'" == "" then
-	.
-else
-	select((.account_id|tostring) == "'"$1"'" or (.ips|inside(["'"$1"'"])) )
-end ' | 
-incap_site_to_cols
-#  egrep -w -e "^(\S+\s+){2}${1}" -e "^(\S+\s+){3}${1}" # by account_id or origin
-} # end function
-
-function incap_accounts_ll () {
+function incap_ll_accounts () {
 	{
 	echo -e "Account ID\tAccount Name" ;
-	incapsula_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list |
+	incap_js_accounts |
 	jq -r '.accounts | sort_by(.account_name) | .[] |
 	if "'"$*"'" == ""
 	then
@@ -189,6 +187,6 @@ function incap_accounts_ll () {
 incap_site_status ()
 {
     local incapsula_site_id=$1;
-    incapsula_api "site_id=${incapsula_site_id}" prov/v1/sites/status
+    incap_api "site_id=${incapsula_site_id}" api/prov/v1/sites/status
 }
 

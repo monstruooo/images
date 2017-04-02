@@ -1,0 +1,7 @@
+function incap_help () {
+cat << 'EOF'
+
+mk <account id> <domain> <site ip>
+
+EOF
+}

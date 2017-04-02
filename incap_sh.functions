@@ -5,180 +5,79 @@ function incap_cfg () {
 [[ -z $incap_api_key ]] && read -s "API Key: " incap_api_id
 }
 
-function incap_set () {
-cat << EOF
-Incapsula tmp dir
-Incapsula context
-incapsula ID
-Incapsula Name
-EOF
-}
+function incap_js () {
 
-function incap_mount () {
-local alias="cc pwd context ll js mk dl updatedb set_ip purge" cmd
-if [[ -n $incap_ps1_saved ]] ; then
-	PS1="$incap_ps1_saved"
-	unset incap_ps1_saved
-
-	for cmd in $alias ; do
-		unalias $cmd
-	done
-	alias ll="ls -l "
-	echo incap mount OFF
-else
-	[[ x$2 == x[Oo][Ff][Ff] ]] && { echo incap $1 OFF ; return ; }
-	incap_ps1_saved="$PS1"
-	PS1='$(incap pwd) ]$ '
-
-	for cmd in $alias ; do
-		alias $cmd="incap $cmd "
-	done
-	echo incap mount ON
-fi
-} # end function 
-
-function incap_context () {
-case $incap_path_wd in
-	accounts)
-		[[ -n $incap_path_id ]] && echo account || echo accounts
-		;;
-	sites)
-		[[ -n $incap_path_id ]] && echo site || echo sites
-		;;
-	'')
-		echo root
-		;;
-esac
-} #end function
-
-function incap_pwd () {
-echo -n incapsula://$incap_path_wd
-if [[ -n $incap_path_name ]] ; then
-	echo /${incap_path_name}:${incap_path_id}
-else
-	echo
-fi
-}
-
-function incap_cc () {
-
-if [[ -z $1 || x$1 == x/ ]] ; then # incap cc / ; incap cc
-	unset incap_path_name incap_path_id incap_path_wd
-	return
+if [[ x$1 == xaccounts ]] ; then
+	shift
+	if [[ -n $1 ]] ; then
+		incap_js_sites $1
+	else
+		incap_js_accounts
+	fi
+elif [[ x$1 == xsites ]] ; then
+	shift
+	if [[ -n $1 ]] ; then
+		incap_js_sites $1 
+	else
+		incap_js_sites
+	fi
 fi
 
-case $1 in
-	accounts|sites) 
-		incap_path_wd=$1
-		unset incap_path_name incap_path_id
-		return
-		;;
-esac
-
-[[ x$1 == x.. ]] && case $(incap_context) in
-	accounts|sites)
-		unset incap_path_wd
-		return
-	;;
-	account|site)
-		unset incap_path_name incap_path_id
-		return
-	;;
-esac
-
-case $(incap_context) in
-accounts)
-    read incap_path_id incap_path_name < <( 
-	incap_accounts_ll $1 |
-	egrep -v 'Account Name')
-	[[ x$incap_path_id =~ ^x[0-9]+$ ]] || unset incap_path_id incap_path_name
-;;
-
-sites|account)
-	res=$( incap_site_id $1 ) || return
-    read incap_path_id incap_path_name cname <<< "$res"
-	incap_path_wd=sites # If context is account
-;;
-esac
 }
 
 function incap_ll () {
 
 if [[ x$1 == xaccounts ]] ; then
-	if [[ -n $2 ]] ; then
-		shift
-		incap_sites_ll $1
+	shift
+	if [[ -n $1 ]] ; then
+		incap_ll_sites $1
 	else
-		incap_accounts_ll
+		incap_ll_accounts
 	fi
 	return
 elif [[ x$1 == xsites ]] ; then
-	if [[ -n $2 ]] ; then
-		shift
-		incap_site_status $1 | incap_site_summary
+	shift
+	if [[ -n $1 ]] ; then
+		incap_js_sites $1 | incap_site_summary
 	else
-		incap_sites_ll
+		incap_js_sites | incap_js2table
 	fi
 	return
 elif [[ x$1 == xorigins ]] ; then
 	shift
 	if [[ -n $1 ]] ; then
 		{ echo -e "Site Id \t Site Name \t IPs" ;
-		incap_sites_js | 
+		incap_js_sites | 
 			jq -j -r 'select(.ips|inside(["'"$1"'"])) | .site_id, " \t " , .domain , " \t " , (.ips|join(",")) , "\n"' ;
 		} | tabs2cols
 	else
 		{ echo -e "Origin \t Number of Sites" ;
-		incap_sites_js | jq -r '.ips[]' | tr A-Z a-z | sort | uniq -c | sort -r -n -k 1 | awk '{print $2 " \t " $1}' ; } |
+		incap_js_sites | jq -r '.ips[]' | sort | uniq -c | sort -r -n -k 1 | awk '{print $2 " \t " $1}' ; } |
 		tabs2cols
+	fi
+	return
+elif [[ x$1 == xfiles ]] ; then
+	shift
+	if [[ x$1 == xsites ]] ; then
+		find $incap_work_dir/sites -regextype posix-extended -regex "\S+/[^/]+_[0-9]+$" | sort -V
+	elif [[ x$1 == xaccounts ]] ; then
+		find $incap_work_dir/accounts/account_page-[0-9]* | sort -V
+	else
+		echo accounts
+		echo sites
 	fi
 	return
 fi
 
 case $(incap_context) in
 	root)
-		case x$1 in
-			x)
-				echo sites
-				echo accounts
-			;;
-			xaccounts)
-				incap_accounts_ls
-			;;
-			xsites)
-				incapsula_sites_ll
-			;;
-			*)
-				echo I dont understand your command
-			;;
-		esac
-		return
-	;;
-	accounts)
-		if [[ -n $1 ]] ; then
-			incap_sites_ll $1
-		else
-			incap_accounts_ll
-		fi
-	;;
-	sites)
-		if [[ -n $1 ]] ; then
-			read -r id name cname < <(incap_site_id $1)
-			[[ -z $id ]] && return 1
-			incap_site_status $id | incap_site_summary
-		else
-			incap_sites_ll
-		fi
-	;;
-	account)
-		if [[ -n $1 ]] ; then
-			incap_site_status $1 | incap_site_summary
-		else
-			incap_sites_ll $incap_path_id
-		fi
-	;;
+		echo sites
+		echo accounts
+		echo origins
+		echo files
+	;;	
 	site)
-			incap_site_status $incap_path_id | json2bash
+		incap_js_sites $incap_path_id | json2bash
 	;;
 esac
 }
@@ -186,6 +85,10 @@ esac
 incap_site_summary () {
 cat /dev/stdin |
 jq -r '
+"Site ID"
+	+ "\t = " +
+		(.site_id?|tostring),
+
 "Site Name"
 	+ "\t = " +
 		.domain?,
@@ -243,7 +146,7 @@ jq -r '
 	tabs2cols
 }
 
-function incap_site_to_cols () {
+function incap_js2table () {
 local flow='
 	{ 
 	echo ... ;
@@ -276,13 +179,29 @@ jq -r '
 
 function incap () {
 
-mkdir -p $incap_tmp_dir/sites
+incap_work_dir=/dev/shm/$USER/incapsula
+accounts_dir=$incap_work_dir/accounts sites_dir=$incap_work_dir/sites
+mkdir -p $accounts_dir $sites_dir
 
 incap_cfg
 local action=$1
-[[ -z $action ]] && action=help
 shift
-incap_${action} "$@"
+case x$action in
+	xsite)	
+		action=$1
+		shift
+		incap_site_${action} "$@"
+		# incap site ip 12345 1.2.3.4 -> incap_site_ip 12345 1.2.3.4
+		;;
+	x)
+		incap_help
+		;;
+	*)
+		incap_${action} "$@"
+		# incap purge cache 12345 -> incap_purge cache 12345
+		;;
+esac
+		
 } # end function incap
 
 
