@@ -68,16 +68,6 @@ case $1 in
 esac
 }
 
-function incap_ddos_threshold () {
-local id=$1 ddos_threshold=$2 data
-[[ -z $2 ]] && return 1
-data="site_id=${id}&rule_id=api.threats.ddos&activation_mode=api.threats.ddos.activation_mode.auto&ddos_traffic_threshold=${ddos_threshold}"
-if res=$(incap_api "$data" api/prov/v1/sites/configure/security)
-then
-	echo $res | jq '.security.waf.rules[] |  select(.id=="api.threats.ddos")'
-fi
-}
-
 function incap_site_ip () { 
 local usage='
 	incap site ip <site_id> <ip|hostname>'
