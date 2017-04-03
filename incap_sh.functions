@@ -59,9 +59,9 @@ elif [[ x$1 == xorigins ]] ; then
 elif [[ x$1 == xfiles ]] ; then
 	shift
 	if [[ x$1 == xsites ]] ; then
-		find $incap_work_dir/sites -regextype posix-extended -regex "\S+/[^/]+_[0-9]+$" | sort -V
+		find $incap_sites_dir -regextype posix-extended -regex "\S+/[^/]+_[0-9]+$" | sort -V
 	elif [[ x$1 == xaccounts ]] ; then
-		find $incap_work_dir/accounts/account_page-[0-9]* | sort -V
+		find $incap_accounts_dir/account_page-[0-9]* | sort -V
 	else
 		echo accounts
 		echo sites
@@ -180,8 +180,10 @@ jq -r '
 function incap () {
 
 incap_work_dir=/dev/shm/$USER/incapsula
-accounts_dir=$incap_work_dir/accounts sites_dir=$incap_work_dir/sites
-mkdir -p $accounts_dir $sites_dir
+incap_accounts_dir=$incap_work_dir/accounts 
+incap_sites_dir=$incap_work_dir/sites 
+incap_work_dir=$incap_work_dir/run
+mkdir -p $incap_accounts_dir $incap_sites_dir $incap_work_dir
 
 incap_cfg
 local action=$1

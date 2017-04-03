@@ -43,30 +43,18 @@ jq -e  'if has("site_id") and has("domain") and has("site_creation_date") then .
 
 function incap_site2disk () {
 local domain site_id json
-mkdir -p $sites_dir
+mkdir -p $incap_sites_dir
 cat /dev/stdin |
 jq -c -j '.domain , " " , .site_id , " " , . , "\n"' |
 while read -r domain site_id json ; do
-	echo $json >  $sites_dir/${domain}_${site_id}
+	echo $json >  $incap_sites_dir/${domain}_${site_id}
 done
 } # end function
 
 function incap_js_sites () {  
 
-local last_update=$sites_dir/last_update file files
-if [[ ! -f $last_update ]] || find $accounts_dir/account_page-[0-9]* -newer $last_update  | egrep -q '\S+'
-then
-	rm -f $sites_dir/* ; touch $last_update
-	jq -n '{ message: "Exploding Incapsula configuration. Can take some seconds" , source: "Oskar" }' 1>&2
-	files=$(incap ll files accounts)
-	[[ -z $files ]] && { echo No files found. Run incap updatedb ; return 1 ; }
-	for file in $files ; do
-		jq .sites[] $file | incap_site2disk &
-	done 
-	wait
-fi
 if [[ -z $1 ]] ; then
-	find $sites_dir -regex '.+_[0-9]+$' -exec cat {} \;
+	find $incap_sites_dir -regex '.+_[0-9]+$' -exec cat {} \;
 	return
 fi
 
@@ -74,11 +62,17 @@ incap ll files sites | egrep -e "/${1}_[0-9]+$" -e "/[^/]+_${1}$" | xargs cat
 }
 
 function incap_updatedb () {
+
+if [[ -n $1 ]] ; then
+	incap site status $1 | jq . 
+	return
+fi
+
 local account_id 
 local account accounts accounts2 request requests p
 
 accounts=$(incap ll accounts |	egrep -o '^[0-9]+')
-rm -f $accounts_dir/account_page-[0-9]*
+rm -f $incap_accounts_dir/account_page-[0-9]*
 accounts=" "$(echo $accounts)" " # echo and spaces to allow removing finished accounts as / $account / /
 accounts2=$accounts
 
@@ -115,7 +109,7 @@ while true ; do
 		echo $accounts| wc -w | egrep -q ^0 && break
             account=${request%:*} p=${request#*:};
             printf 'Account: %-6s Page: %-3s\n' $account $p | egrep --color '.*';
-            file=$accounts_dir/account_page-${account}_${p};
+            file=$incap_accounts_dir/account_page-${account}_${p};
             incap_api "account_id=${account}&page_size=${page_size}&page_num=$p" api/prov/v1/sites/list > $file & while true; do
                 local jobs;
                 jobs=$(jobs -l | grep -o 'incap_api.*' | wc -l) || continue;
@@ -128,7 +122,7 @@ while true ; do
         for account in $accounts;
         do
             debug="Page = $page";
-            file=$accounts_dir/account_page-${account}_${page};
+            file=$incap_accounts_dir/account_page-${account}_${page};
             res=$( jq -r .res $file);
             if (( res != 0 )); then
                 exit_code=$res;
@@ -147,7 +141,7 @@ while true ; do
     do
         echo;
         echo $account;
-        for file in $accounts_dir/account_page-${account}_[0-9];
+        for file in $incap_accounts_dir/account_page-${account}_[0-9];
         do
             printf '%-11s%-5s%-3s%-3s\n' $( cat $file |
                 jq -r \"${file#*conf_}'" + .page + " " +(.sites|length|tostring) + " " + (.res|tostring) + " " + .res_message');
@@ -155,13 +149,24 @@ while true ; do
     done;
     echo;
     echo Duplicate sites:;
-    jq -r .sites[].domain $accounts_dir/account_page-[0-9]* | sort -V | uniq -d | egrep --color '.*' || echo No duplicate sites detected;
+    jq -r .sites[].domain $incap_accounts_dir/account_page-[0-9]* | sort -V | uniq -d | egrep --color '.*' || echo No duplicate sites detected;
     if [[ x$exit_code != x0 ]]; then
         echo -e "\nAt least one page failed with error\n" | egrep --color '.*';
         return $exit_code;
     else
         echo -e "\nSuccessfully finished downloading all Incapsula site reports\n";
     fi
+
+	rm -f $incap_sites_dir/*
+	jq -n '{ message: "Exploding Incapsula configuration. Can take some seconds" , source: "Oskar" }' 1>&2
+	files=$(incap ll files accounts)
+	[[ -z $files ]] && { echo No files found. Run incap updatedb ; return 1 ; }
+	for file in $files ; do
+		jq .sites[] $file | incap_site2disk &
+	done 
+	wait
+
+
 }
 
 function incap_js_accounts () {
