@@ -1,8 +1,5 @@
 #!/bin/bash
 
-dnsme_tmp_dir=/dev/shm/$USER/tmp/dnsme
-mkdir -p $dnsme_tmp_dir
-
 dnsme_debug=off
 
 function dnsme_debug () {
@@ -81,7 +78,7 @@ function dnsme_get () {
 local info='
 	If no argument is provided the function exits after pulling the list of domains '
 
-local cache=$dnsme_tmp_dir/all.domains
+local cache=$dnsme_work_dir/all.domains
 mkdir -p $( dirname $cache)
 local logic='( if cache not json or ( refresh set and cache is older than refresh), then refresh cache
 Also means: if cache is json and refresh unset, then dont refresh cache'
@@ -100,7 +97,7 @@ local name id
 read -r name id < <(jq -j '.data[] | select((.id|tostring)=="'$1'" or .name=="'$1'") | .name , " ", .id' $cache)
 [[ -n $id ]] || { jqres code=1 src=${FUNCNAME[0]} msg="No domain with id or name $1" 1>&2 ; return 1 ; }
 
-local dmn_cache=$dnsme_tmp_dir/$name
+local dmn_cache=$dnsme_work_dir/$name
 local bash_syntax='
 	find -mmin +3
 		Finds files modified more than 3 minutes ago
@@ -115,10 +112,10 @@ jq . $dmn_cache
 } # end function dnsme_get
 
 function dnsme_domain_id () { local domain_name=$1 domain_id
-    dnsme_get | jq -e -j '.data[] | select(.name=="'$1'" or (.id|tostring)=="'$1'") | .name , " " , .id' 
+    dnsme_get | jq -e -j '.data[] | select(.name=="'$1'" or (.id|tostring)=="'$1'") | .name , " " , .id , "\n"' 
 } # end function
 
-function dnsme_domains_ll () {
+function dnsme_ll_domains () {
 	{
 	echo -e "Domain Id \t Domain name" ;
 	dnsme get |
@@ -131,7 +128,7 @@ function dnsme_purge () {
 # purge deleted domains
 local domains cached_domains
 domains=$( dnsme cd ; dnsme ll | awk '{print $2}' | sed 1d )
-cached_domains=$( find $dnsme_tmp_dir/* | egrep -v 'all.domains|res')
-diff -Bb -y <(echo "$cached_domains") <( echo "$domains") --suppress-common-lines | 
-egrep '<$' | awk '{print "'$dnsme_tmp_dir'/" $1}' | xargs /bin/rm -fv
+cached_domains=$( find $dnsme_work_dir/* | egrep -v 'all.domains|res')
+diff -Bb  <( echo "$domains")  <(echo "$cached_domains")  --suppress-common-lines  |
+egrep '^>' | awk '{print $2}' | xargs -L 1 /bin/rm -fv
 }

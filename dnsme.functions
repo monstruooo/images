@@ -1,6 +1,6 @@
 #!/bin/bash
 
-function dnsme_records_table () {
+function dnsme_js2table () {
 
 	{
 echo -e "Id \t Name \t Type \t TTL \t Value" ;
@@ -42,7 +42,7 @@ args_to_vars "$@"
 data=$(args_to_json "$@")
 if [[  -n $domain ]] ; then
 	data=$( jq -n "$data | { name: .domain }")
-    dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/ -X POST -d "$data"
+    dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/ -X POST -d "$data" | jq .
 else
 	return 1
 fi

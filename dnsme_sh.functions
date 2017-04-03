@@ -88,10 +88,10 @@ case $(dnsme_context) in
 root)
 	if [[ -n $1 ]] ; then  
 	# dnsme:// dnsme ll <domain>
-		dnsme get $1 | dnsme_records_table
+		dnsme get $1 | dnsme_js2table
 	else  
 	# dnsme:// dnsme ll
-		dnsme_domains_ll
+		dnsme_ll_domains
 	fi
 ;;
 domain)
@@ -100,7 +100,7 @@ domain)
 		dnsme get $dnsme_dmn | jq -c '.data[]|select(.id|tostring=="'$1'")' |  json2bash
 	else
 		# dnsme://<domain>:<domain id> dnsme ll
-		dnsme get $dnsme_dmn | dnsme_records_table
+		dnsme get $dnsme_dmn | dnsme_js2table
 	fi
 ;;
 esac
@@ -168,17 +168,15 @@ function dnsme_cd () {
 if [[ -z $1 || x$1 == x/ ]] ; then 
 	unset dnsme_dmn dnsme_dmn_id
 else 
-	local name id
-	read -r name id < <(dnsme_domain_id $1)
-	[[ -n $name ]] || { echo No such domain $1 1>&2 ; return 1; } 
-	dnsme_dmn_id=$id dnsme_dmn=$name
+	read -r dnsme_dmn dnsme_dmn_id < <(dnsme_domain_id $1)
+	[[ -n $dnsme_dmn ]] || { echo No such domain $1 1>&2 ; return 1; } 
 fi
 } # end function
 
 function dnsme () {
 
-dnsme_tmp_dir=/dev/shm/$USER/tmp/dnsme
-mkdir -p $dnsme_tmp_dir
+dnsme_work_dir=/dev/shm/$USER/dnsme
+mkdir -p $dnsme_work_dir
 
 dnsme_cfg
 local action=$1
