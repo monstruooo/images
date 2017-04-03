@@ -64,7 +64,10 @@ incap ll files sites | egrep -e "/${1}_[0-9]+$" -e "/[^/]+_${1}$" | xargs cat
 function incap_updatedb () {
 
 if [[ -n $1 ]] ; then
-	incap site status $1 | jq '{ res , res_message }'
+	local id
+	for id in $@ ; do
+		incap site status $id | jq '{ res , res_message, domain , site_id: '$id' }'
+	done
 	return
 fi
 
