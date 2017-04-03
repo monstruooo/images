@@ -64,7 +64,7 @@ incap ll files sites | egrep -e "/${1}_[0-9]+$" -e "/[^/]+_${1}$" | xargs cat
 function incap_updatedb () {
 
 if [[ -n $1 ]] ; then
-	incap site status $1 | jq . 
+	incap site status $1 | jq '{ res , res_message }'
 	return
 fi
 
