@@ -70,7 +70,7 @@ esac
 
 function incap_site_ssl () {
 local id=$1
-[[ x$1 =~ ^x[0-9]+$ ]] && return 1
+[[ x$1 =~ ^x[0-9]+$ ]] || return 1
 incap_api "site_id=${id}&param=domain_validation&value=dns" api/prov/v1/sites/configure |
 jq -r .debug_info.domain_dns
 }
