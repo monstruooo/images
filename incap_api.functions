@@ -66,7 +66,7 @@ function incap_updatedb () {
 if [[ -n $1 ]] ; then
 	local id
 	for id in $@ ; do
-		incap site status $id | jq '{ res , res_message, domain , site_id: '$id' }'
+		incap site status $id | incap site summary
 	done
 	return
 fi
