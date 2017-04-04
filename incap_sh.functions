@@ -29,11 +29,7 @@ function incap_ll () {
 
 if [[ x$1 == xaccounts ]] ; then
 	shift
-	if [[ -n $1 ]] ; then
-		incap_ll_sites $1
-	else
-		incap_ll_accounts
-	fi
+	incap_ll_accounts "$@"
 	return
 elif [[ x$1 == xsites ]] ; then
 	shift
@@ -46,9 +42,10 @@ elif [[ x$1 == xsites ]] ; then
 elif [[ x$1 == xorigins ]] ; then
 	shift
 	if [[ -n $1 ]] ; then
-		{ echo -e "Site Id \t Site Name \t IPs" ;
+		{ echo -e "Site Id \t Site Name \t Account Id \t IPs" ;
 		incap_js_sites | 
-			jq -j -r 'select(.ips|inside(["'"$1"'"])) | .site_id, " \t " , .domain , " \t " , (.ips|join(",")) , "\n"' ;
+			jq -j -r 'select(.ips|inside(["'"$1"'"])) |
+			.site_id, " \t " , .domain , " \t " , .account_id , " \t " , (.ips|join(",")) , "\n"' ;
 		} | tabs2cols
 	else
 		{ echo -e "Origin \t Number of Sites" ;
@@ -68,18 +65,6 @@ elif [[ x$1 == xfiles ]] ; then
 	fi
 	return
 fi
-
-case $(incap_context) in
-	root)
-		echo sites
-		echo accounts
-		echo origins
-		echo files
-	;;	
-	site)
-		incap_js_sites $incap_path_id | json2bash
-	;;
-esac
 }
 
 incap_site_summary () {

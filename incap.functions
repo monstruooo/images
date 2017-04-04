@@ -26,27 +26,11 @@ incap_site_add () {
 	fi
 }
 
-function incap_ssl_by_email () {
-
-[[ -z $1 ]] && { return || exit ;  }
-site_id=$(incapsula_site_id_from_name $1)
-
-incap_api "site_id=$site_id&domain=$1" api/prov/v1/domain/emails | 
-	jq -r '"\nApprover emails '$1':\n" , .domain_emails[] + "\n"'
-
-echo Press Enter to skip
-read -p "Validation Email: " ssl_email
-
-[[ -z $ssl_email ]] && 
-	{ return || exit ; }
-
-    {
-incap_api "site_id=$site_id&param=approver&value=$ssl_email" api/prov/v1/sites/configure ;
-incap_api "site_id=$site_id&param=domain_validation&value=email" api/prov/v1/sites/configure ;
-    } |
-	jq -r '"", { domain, status, statusEnum, ssl, res, res_message, debug_info }'
-
-} # end function incap_ssl_by_email
+incap_site_rm () {
+[[ -z $1 ]] && return 1
+incap api "site_id=$1" api/prov/v1/sites/delete
+incap ll files sites | egrep ".*_${1}$" | xargs -L 1 rm -v
+}
 
 function incap_site_purge () {
 local usage='

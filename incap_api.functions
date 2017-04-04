@@ -177,19 +177,17 @@ function incap_js_accounts () {
 }
 
 function incap_ll_accounts () {
-	{
-	echo -e "Account ID\tAccount Name" ;
-	incap_js_accounts |
-	jq -r '.accounts | sort_by(.account_name) | .[] |
-	if "'"$*"'" == ""
-	then
-		.
+	if [[ -z $1 ]] ; then
+		{ echo -e "Account ID \t Account Name" ;
+		incap js accounts |
+			jq -r '.accounts | sort_by(.account_name) | .[] |
+			(.account_id|tostring) + " \t " + .account_name' ;
+		} | tabs2cols
 	else
-		select(.account_name=="'"$*"'" or (.account_id | tostring)=="'"$*"'")
-	end |
-	(.account_id|tostring) + " \t " + .account_name' ;
-	} |
-	tabs2cols
+		incap js sites |
+			jq -r 'select((.account_id | tostring)=="'"$*"'")' |
+			incap_js2table
+	fi
 }
 
 incap_site_status ()
