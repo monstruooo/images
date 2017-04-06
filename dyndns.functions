@@ -1,0 +1,327 @@
+#!/bin/bash
+info='
+	dyndns_api is both function that runs curl and the url of the api
+
+	http://dyn.com/blog/dynect-api-example-curl-managed-dns-aws-heroku-devops/
+	DynECT Managed DNS API: Get Started Using CURL, Java or Python'
+
+export dyndns_api=https://api.dynect.net
+function api_path () {
+if echo $1 | egrep -q 'REST' ; then
+	echo $dyndns_api/$( echo $1 | sed -r 's,.*REST/,,')
+else
+	echo $dyndns_api/$1
+fi
+}
+
+function dyn_zone_changes () {
+dyndns_api -X GET  $dyndns_api/ZoneChanges/$domain
+}
+
+function dyn_domain_rm () {
+dyndns_api -X DELETE  $dyndns_api/REST/Zone/${1:-None}/
+}
+
+function dyndns_cfg () {
+dyndns_user=$dyn_user
+dyndns_pwd=$dyn_pwd
+[[ -z $dyndns_user ]] && read -p 'User: ' dyndns_user
+[[ -z $dyndns_pwd ]] && read -s -p 'Password: ' dyndns_pwd ; echo 
+}
+
+function dyndns_token () {
+# It's impossible to save the token between sessions as a global variable
+# Command substitution runs a subshell and all its variables are lost
+
+local res 
+local data=$( jq -n '.customer_name="spotoption1" | .user_name="'${dyndns_user}'" | .password="'${dyndns_pwd}'"' )
+
+[[ -n $dyndns_token ]] && res=$(dyn_keep_alive)
+
+if (( $? != 0 )) # exit code will be 1 both if keep_alive fails and if dyndns_token is empty
+then
+	res=$( curl -Ss -H content-type:application/json --data "$data" $dyndns_api/Session)
+	if ! echo $res | jq -r .status | egrep -q success
+	then
+		jq .msgs[].INFO 1>&2 <<< "$res" 
+		return 1
+	else
+		dyndns_token=$( jq --raw-output .data.token <<< "$res" )
+	fi
+fi
+
+jq -n '.data.token="'$dyndns_token'"'
+}
+
+function dyndns_api () {
+# echo ; set -x
+res=$( curl -Ss -H content-type:application/json -H "Auth-Token: $dyndns_token" "$@" )
+# set +x ; echo 
+if echo $res | jq -r .status | egrep -q success
+then
+	echo $res
+else
+	echo $res | jq '.msgs[] | .INFO' 1>&2 
+	return 1
+fi
+}
+
+function dyn_publish_changes () {
+local info='
+		Checking for pending changes
+		dyndns_api $dyndns_api/ZoneChanges/$domain | jq
+		publishing zone changes'
+dyndns_api -X PUT --data '{"publish":true,"zone":"'$domain'"}' $dyndns_api/Zone/$domain/ | jq .msgs[].INFO
+}
+
+function dyn_publish_zone () {
+local warning='!!! Warning. This publishes new zones. Not changes within existing zones'
+dyndns_api -X PUT --data '{"publish":true}' $dyndns_api/Zone/$domain/ | jq .msgs[].INFO
+}
+
+
+function dyn_kill_token () {
+# destroy token
+dyndns api -X DELETE $dyndns_api/Session | jq .msgs[].INFO 1>&2
+}
+
+function dyn_keep_alive () {
+dyndns api REST/Zone/ > $cache || return 1
+fi
+jq -r .data[] $cache | xargs -L 1 basename
+}
+
+function dyn_get_zones () {
+local url=$dyndns_api/REST/Zone
+[[ -n $1 ]] && url=$url/$1   # https://api.dynect.net/REST/Zone/tdoptions.com
+curl -H "Auth-Token: $token" -H "content-type:application/json" $url
+}
+
+function dyn_list_nodes () {
+dyndns_api $dyndns_api/NodeList/$domain
+}
+function dyn_delete_cname () {
+node=$1 $id=$2
+dyndns_api -X DELETE https://api.dynect.net/REST/CNAMERecord/$domain/$1
+}
+
+function dyn_delete_node () {
+node=${1:-None}
+[[ x$node == x$domain ]] && return 255
+dyndns_api -X DELETE https://api.dynect.net/REST/Node/$domain/$node
+}
+
+
+function dyn_records_list () {
+Readme='
+AllRecord/$domain will publish all records
+/REST/ARecord/oskar-test.com/oskar-test.com/253731101'
+
+local domain name type json
+json="$*"
+domain=$(jq -e -r -n "$json | .domain") || return 1
+type=$(jq -e -r -n "$json"' | if (.type==null) then empty else . | .type end')
+name=$(jq -e -r -n "$json"' | if (.name==null) then empty elif (.name=="") then "'$domain'" else "\(.name).'$domain'" end') 
+
+local allrecord_cache=${DYNDNS_TMP_DIR}/${domain}.ALLRecord
+
+if is_json $allrecord_cache  && # allrecord_cache was modified less than autorefresh minutes ago
+( [[ -n $dyndns_autorefresh ]] && find $allrecord_cache -mmin -${dyndns_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
+then
+	local tag="Nothing to do"
+else 
+	dyndns_api $dyndns_api/AllRecord/$domain/ | jq '.data | {data: . }' > $allrecord_cache || return 1
+fi
+cat $allrecord_cache | jq '.data[] | select( . | capture( "'/${type:-[A-Z]+}Record/$domain/$name'" ; "i" ) )' |
+jq -s '{data: . }'
+}
+
+function dyn_records_print () {
+dyndns_token 1>&2
+local json domain record records
+json="$*"
+domain=$(jq -e -r -n "$json | .domain") || return 1
+records=$( dyn_records_list "$json" | jq -r .data[] )
+
+for record in $records ; do
+record=${record#/}
+dyndns_api https://api.dynect.net/$record |
+jq  -r '.data | .extra_keys="DNS Made Easy" |
+.id=.record_id | .domain=.zone | .name=(.fqdn | sub("\\.?'$domain'$";"")) | .type=.record_type|
+.value = 
+(if .rdata | has("cname") then .rdata.cname 
+elif .rdata | has("address") then .rdata.address 
+elif .rdata | has("txtdata") then .rdata.txtdata
+elif .rdata | has("nsdname") then .rdata.nsdname 
+else "" end)'
+
+done
+}
+
+function dyn_records_format () {
+dyndns_token
+local records=$( dyn_records_list $domain | jq -r .data[] )
+
+echo https://manage.dynect.net/qcke/$domain
+echo
+for record in $records ; do
+dyndns_api https://api.dynect.net$record |
+jq -c -r '.data | "\(.record_id)  \(if .fqdn == "'$domain'" then "@" else .fqdn | sub("'.$domain'";"") end )   \(.record_type)  \"\(.rdata[])\""' |
+xargs printf '%-11s %-44s %-11s %s\n\n'
+
+done
+}
+
+function dyn_domain_add () {
+dyndns_token
+local data=$( jq -n '. | .rname="dnsadmin.spotoption.com" | .ttl=1800' )
+# Output {"rdata":{"rname":"dnsadmin.spotoption.com"},"ttl":1800}
+dyndns_api --data "$data" $dyndns_api/Zone/$domain/ | jq
+dyn_publish_changes
+}
+
+function dyn_record_get () {
+local musing='
+	dyndns_api -X GET $dyndns_api/$rec 
+	/REST/CNAMERecord/oskar-test.com/spotplatform.oskar-test.com/198286304
+	I cant decide whether this function should construct the full url or receive it ready or both'
+
+local api_path=${1:-None} type=${2:-None}
+if echo $1 | egrep -q 'REST/' ; then
+	api_path=$(api_path $api_path)
+else
+	api_path=$dyndns_api/REST/${type}/$domain/$api_path
+fi
+
+local domain=$(echo $api_path | egrep -o '(/[^/]+){3}$' )
+[[ -z $domain ]] && return 1
+local id=$( basename $api_path)
+domain=$( echo $domain | cut -d/ -f2)
+local rcrd_cache=${DYNDNS_TMP_DIR}/${domain}.${id}
+
+if is_json $rcrd_cache  && ( [[ -n $dyndns_autorefresh ]] && find $rcrd_cache -mmin -${dyndns_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
+then
+	/bin/cat $rcrd_cache 
+else
+	local logic='If nothing returned, file empty and fails is_json test'
+	dyndns_api -X GET $api_path | jq '.data' | tee $rcrd_cache
+fi
+}
+
+function dyn_configure_record () {
+local fqdn=$1 id
+: << EOF
+spotplatform.oskar-test.com
+spotplatform.oskar-test.com/198286304
+/REST/CNAMERecord/oskar-test.com/spotplatform.oskar-test.com/198286304
+EOF
+
+id=$( echo $fqdn | egrep -o '/[0-9]+/?$' | egrep -o '[0-9]+' )
+fqdn=$( echo $fqdn | sed -r 's,/[0-9]+/?$,,' | egrep -o '[^/]+$')
+
+local fqdn=$( sed -r  "/$domain(\.)?$/q  ; s/(\.)?$/.$domain/" <<< ${fqdn/@/$domain})
+: << EOF
+spotplatform.yingtrader.com  -> spotplatform.yingtrader.com
+spotplatform                 -> spotplatform.yingtrader.com
+@                            -> yingtrader.com
+EOF
+
+declare -u type=$2
+local rdata_value=$3
+local ttl=${4:-1800}
+
+case $type in
+	TXT)
+		rdata_key=txtdata
+		;;
+	CNAME)
+		rdata_key=cname
+		;;
+	A)
+		rdata_key=address
+		;;
+esac
+local data=$( jq -n .rdata.$rdata_key='"'$rdata_value'" | .ttl='$ttl )
+
+if [[ x$1 == x@aaa ]] ; then
+	dyndns_api -X POST --data "$data" $dyndns_api/${type}Record/$domain/$fqdn/ | jq # CNAMERecord, ARecord, TXTRecord
+	return
+fi
+
+# If we have the record id, we just go straight to update it and then exit
+if [[ -n $id ]] ; then
+	dyndns_api -X PUT --data "$data" $dyndns_api/${type}Record/$domain/$fqdn/$id | jq 
+	return
+fi
+
+local res record_count record_id 
+# /REST/ARecord/oskar-test.com/oskar-test.com/253731101
+res=$(dyn_records_list '{"domain":"'$domain'"}' | jq -r .data[] | grep -F "/$domain/$fqdn/" )
+record_count=$( echo "$res" | grep -F -c "/$domain/$fqdn/" )
+
+
+# The order is important because of naked records. The order should be count==0, then fqdn==domain (naked)
+if [[ $record_count == 0 ]] ; then
+	dyndns_api -X POST --data "$data" $dyndns_api/${type}Record/$domain/$fqdn/ | jq 
+elif [[ x$fqdn == x$domain ]] ; then
+	for rcrd in $res ; do
+		echo $rcrd
+		if dyn_record_get $rcrd | jq -r '.data.rdata[] |.. ' | egrep -q -w "$rdata_value" ; then
+			echo update $rdata_value $(api_path $rcrd)
+			dyndns_api -X PUT --data "$data" $(api_path $rcrd) | jq 
+			return
+		fi
+	done
+	dyndns_api -X POST --data "$data" $dyndns_api/${type}Record/$domain/$fqdn/ | jq ; set +x
+elif (( record_count == 1 )) ; then
+	dyndns_api -X PUT --data "$data" $(api_path $res) | jq # CNAMERecord, ARecord, TXTRecord
+else
+    echo Something is wrong. $record_count identical records $record_name
+    return 1
+fi
+}
+
+function dyndns_is_fresh () {
+# If local copy is fresh, returns 0
+# If returns 1, need to download again
+
+# if doesn't exist as file
+	[[ -n $1 && -f $1 ]] || return 1
+# if not json
+	/bin/cat $1 > /dev/zero | is_json || return 1
+# if no refresh is set, use local copy
+	[[ -z $dyndns_refresh ]] && return 0
+# if file is older than refresh
+	find $1 -mmin +${dyndns_refresh:-0} 2>/dev/zero | egrep -q [a-z]+ || return 1
+}
+
+function dyndns () {
+
+dyndns_refresh=3
+
+dyndns_work_dir=/dev/shm/$USER/dyndns
+dyndns_domains_dir=$dyndns_work_dir/domains
+dyndns_work_dir=$dyndns_work_dir/run
+mkdir -p $dyndns_work_dir $dyndns_domains_dir
+
+dyndns_cfg
+
+local action=$1
+shift
+case x$action in
+	xdomain|xrecord|xcache)
+		action=${action}_$1
+		shift
+		dyndns_$action "$@" 
+		# dyndns ll cache -> dyndns_ll_cache
+		# dyndns domain rm 12345 -> dyndns_domain_rm 12345
+		;;
+	x)
+		;;
+	*)
+		dyndns_$action "$@" 
+		# dyndns ll -> dyndns_ll
+		# dyndns ll 12345 -> dyndns_ll 12345
+		;;
+esac	
+} # end function dyndns
