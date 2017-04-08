@@ -28,36 +28,40 @@ function dyn_cfg () {
 [[ -z $dyn_pwd ]] && read -s -p 'Password: ' dyn_pwd
 }
 
-function dyn_token () {
+function dyn_token_get () {
 
-local res 
-local data=$( jq -n '.customer_name="spotoption1" | .user_name="'${dyn_user}'" | .password="'${dyn_pwd}'"' )
+local res ts=$dyn_work_dir/token.ts # ts means time stamp
 
-[[ -n $dyn_token ]] && res=$(dyn_is_alive 2>/dev/zero)
+[[ -n $dyn_token ]] && ( find $ts -mmin 3 || res=$(dyn_token_is_alive 2>/dev/zero) )
+# if token exists and time stamp less than three minutes old
+# Or if token exists and confirmed alive thru api
 
 if (( $? != 0 )) # exit code will be 1 both if is_alive fails and if dyn_token is empty
 then
-	unset dyn_token
-	res=$( dyn api --data "$data" $dyn_api/REST/Session) || return
-	dyn_token=$( jq --raw-output .data.token <<< "$res" )
+	unset dyn_token	
+	echo > $ts
+	local data=$( jq -n '.customer_name="spotoption1" | .user_name="'${dyn_user}'" | .password="'${dyn_pwd}'"' )
+	curl -Ss -H content-type:application/json --data "$data" $dyn_api/REST/Session > $ts
+	dyn_token=$( jq --raw-output .data.token $ts )
+	# function returns error if jq fails
 fi
-
-# jq -n '.data.token="'$dyn_token'"'
 }
 
-function dyn_kill_token () {
+function dyn_token_kill () {
 # destroy token
-dyn api -X DELETE $dyn_api/Session | jq .msgs[].INFO 1>&2
+dyn api -X DELETE $dyn_api/REST/Session | jq .msgs[].INFO 1>&2
 }
 
-function dyn_is_alive () {
+function dyn_token_is_alive () {
 dyn api $dyn_api/REST/Session
 }
 
 function dyn_api () {
 # echo ; set -x
-# ${dyn_token/*/-H Auth-Token:$dyn_token} will be null if dyn_token is unset after failing is_alive
-res=$( curl -Ss -H content-type:application/json ${dyn_token/*/-H Auth-Token:$dyn_token} "$@" 2>&1)
+
+dyn_token_get
+
+res=$( curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token "$@" 2>&1)
 exit_code=$?
 if [[ x$exit_code != x0 ]] ; then
 	echo Curl error mesg: $res 1>&2
@@ -91,23 +95,10 @@ function dyn_publish_zone () {
 dyn_api -X PUT --data '{"publish":true}' $dyn_api/Zone/$domain/ | jq .msgs[].INFO
 }
 
-dyn_ll_domains ()
-{
-    dyn token 1>&2 || return
-    local cache=${dyn_work_dir}/all.domains
-    if ! dyn_is_fresh $cache; then
-        if res=$(dyn_api $dyn_api/REST/Zone/) ; then
-			echo $res > $cache
-		else
-			return 1;
-		fi
-    fi
-    jq -r .data[] $cache | xargs -L 1 basename
-}
-
 function dyn_list_nodes () {
 dyn_api $dyn_api/NodeList/$domain
 }
+
 function dyn_delete_cname () {
 node=$1 $id=$2
 dyn_api -X DELETE https://api.dynect.net/REST/CNAMERecord/$domain/$1
@@ -119,33 +110,66 @@ node=${1:-None}
 dyn_api -X DELETE https://api.dynect.net/REST/Node/$domain/$node
 }
 
+dyn_ls_domains ()
+{
+    dyn token 1>&2 || return
+    local cache=${dyn_domains_dir}/all.domains
+    if ! dyn_is_fresh $cache; then
+        if res=$(dyn_api $dyn_api/REST/Zone/) ; then
+			echo $res > $cache
+		else
+			return 1;
+		fi
+    fi
+    jq -r .data[] $cache | xargs -L 1 basename
+}
 
-function dyn_records_list () {
+
+function dyn_ls_domain () {
 Readme='
 AllRecord/$domain will publish all records
 /REST/ARecord/oskar-test.com/oskar-test.com/253731101'
 
-local domain name type json
-json="$*"
-domain=$(jq -e -r -n "$json | .domain") || return 1
-type=$(jq -e -r -n "$json"' | if (.type==null) then empty else . | .type end')
-name=$(jq -e -r -n "$json"' | if (.name==null) then empty elif (.name=="") then "'$domain'" else "\(.name).'$domain'" end') 
+local domain 
+[[ -n $1 ]] && domain=$1 || return 1
 
-local allrecord_cache=${DYNDNS_TMP_DIR}/${domain}.ALLRecord
+local cache=$dyn_domains_dir/$domain
 
-if is_json $allrecord_cache  && # allrecord_cache was modified less than autorefresh minutes ago
-( [[ -n $dyn_autorefresh ]] && find $allrecord_cache -mmin -${dyn_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
-then
-	local tag="Nothing to do"
-else 
-	dyn_api $dyn_api/AllRecord/$domain/ | jq '.data | {data: . }' > $allrecord_cache || return 1
+if ! dyn_is_fresh $cache ; then
+	local res
+	if res=$(dyn_api $dyn_api/REST/AllRecord/$domain/ | jq '{data}') ; then
+		echo $res > $cache
+	else
+		return 2
+	fi
 fi
-cat $allrecord_cache | jq '.data[] | select( . | capture( "'/${type:-[A-Z]+}Record/$domain/$name'" ; "i" ) )' |
-jq -s '{data: . }'
+{ echo -e "Id \t Name \t Type" ;
+jq -r .data[] $cache |
+cut -d / --output-delimiter=\  -f 3,5,6 |
+while read type name id ; do
+	type=${type%Record}
+	[[ $type =~ SOA|NS ]] && continue
+	[[ $name =~ ^$domain$ ]] && name=@
+	[[ $name =~ .+$domain$ ]] && name=${name%.$domain}
+	echo -e "$id \t $name \t $type"
+done ; } | tabs2cols 
+}
+
+function dyn_ll_record () {
+local domain id cache
+[[ -z $2 ]] && id=$2 || return 1
+domain=$1
+cache=$dyn_domains_dir/$id
+if ! dyn_is_fresh $cache ; then
+	local name type
+	read id name type < <(dyn ll $domain | egrep '^$id\s')
+	[[ -z $name ]] && return 2
+	[[ $name == @ ]] && name=$domain || name=${name}.$domain
+fi
+
 }
 
 function dyn_records_print () {
-dyn_token 1>&2
 local json domain record records
 json="$*"
 domain=$(jq -e -r -n "$json | .domain") || return 1
@@ -167,7 +191,6 @@ done
 }
 
 function dyn_records_format () {
-dyn_token
 local records=$( dyn_records_list $domain | jq -r .data[] )
 
 echo https://manage.dynect.net/qcke/$domain
@@ -181,7 +204,6 @@ done
 }
 
 function dyn_domain_add () {
-dyn_token
 local data=$( jq -n '. | .rname="dnsadmin.spotoption.com" | .ttl=1800' )
 # Output {"rdata":{"rname":"dnsadmin.spotoption.com"},"ttl":1800}
 dyn_api --data "$data" $dyn_api/Zone/$domain/ | jq
@@ -296,11 +318,11 @@ function dyn_is_fresh () {
 # if doesn't exist as file
 	[[ -n $1 && -f $1 ]] || return 1
 # if not json
-	/bin/cat $1 > /dev/zero | is_json || return 1
+	/bin/cat $1 2> /dev/zero | is_json || return 1
 # if no refresh is set, use local copy
 	[[ -z $dyn_refresh ]] && return 0
 # if file is older than refresh
-	find $1 -mmin +${dyn_refresh:-0} 2>/dev/zero | egrep -q [a-z]+ || return 1
+	find $1 -mmin -$dyn_refresh 2>/dev/zero | egrep -q [a-z]+ || return 1
 }
 
 function dyn_ll () {
@@ -325,7 +347,7 @@ dyn_cfg
 local action=$1
 shift
 case x$action in
-	xdomain|xrecord|xcache)
+	xdomain|xrecord|xcache|xtoken)
 		action=${action}_$1
 		shift
 		dyn_$action "$@" 
