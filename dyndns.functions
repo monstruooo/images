@@ -1,264 +1,144 @@
 #!/bin/bash
-info='
-	dyn_api is both function that runs curl and the url of the api
 
-	http://dyn.com/blog/dynect-api-example-curl-managed-dns-aws-heroku-devops/
-	DynECT Managed DNS API: Get Started Using CURL, Java or Python'
+function dyn_js2table () {
+# jq .data.rdata | jq --stream -j  'select((.[1]|type)=="number") | .[0][],"=",.[1],"," '
+# jq -j '.data.rdata | (keys[] as $k | $k, "=", .[$k],","),"\n" '
+cat /dev/stdin | 
+jq -c -j ' .data |
 
-export dyn_api=https://api.dynect.net
+.value = (.rdata | .. | strings) |
 
-function api_path () {
-if echo $1 | egrep -q 'REST' ; then
-	echo $dyn_api/$( echo $1 | sed -r 's,.*REST/,,')
-else
-	echo $dyn_api/$1
-fi
-}
-
-function dyn_zone_changes () {
-dyn_api -X GET  $dyn_api/ZoneChanges/$domain
-}
-
-function dyn_domain_rm () {
-dyn_api -X DELETE  $dyn_api/REST/Zone/${1:-None}/
-}
-
-function dyn_cfg () {
-[[ -z $dyn_user ]] && read -p 'User: ' dyn_user
-[[ -z $dyn_pwd ]] && read -s -p 'Password: ' dyn_pwd
-}
-
-function dyn_token_get () {
-
-local res ts=$dyn_work_dir/token.ts # ts means time stamp
-
-[[ -n $dyn_token ]] && ( find $ts -mmin 3 || res=$(dyn_token_is_alive 2>/dev/zero) )
-# if token exists and time stamp less than three minutes old
-# Or if token exists and confirmed alive thru api
-
-if (( $? != 0 )) # exit code will be 1 both if is_alive fails and if dyn_token is empty
-then
-	unset dyn_token	
-	echo > $ts
-	local data=$( jq -n '.customer_name="spotoption1" | .user_name="'${dyn_user}'" | .password="'${dyn_pwd}'"' )
-	curl -Ss -H content-type:application/json --data "$data" $dyn_api/REST/Session > $ts
-	dyn_token=$( jq --raw-output .data.token $ts )
-	# function returns error if jq fails
-fi
-}
-
-function dyn_token_kill () {
-# destroy token
-dyn api -X DELETE $dyn_api/REST/Session | jq .msgs[].INFO 1>&2
-}
-
-function dyn_token_is_alive () {
-dyn api $dyn_api/REST/Session
-}
-
-function dyn_api () {
-# echo ; set -x
-
-dyn_token_get
-
-res=$( curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token "$@" 2>&1)
-exit_code=$?
-if [[ x$exit_code != x0 ]] ; then
-	echo Curl error mesg: $res 1>&2
-	echo Curl error code: $exit_code 1>&2
-	return $exit_code
-fi	
-# set +x ; echo 
-if echo $res | jq -e -r .status 2>/dev/zero | egrep -q success ; then
-	echo $res
-elif echo $res | fgrep -q '<html>' ; then
-	echo $res | lynx -dump --stdin 1>&2 || echo $res 1>&2
-	return 1
-elif echo $res | is_json ; then
-	# echo $res | jq '.msgs[] | .INFO' 1>&2 
-	echo $res | jq . 1>&2 
-	return 1
-fi
-}
-
-function dyn_publish_changes () {
-local info='
-	This publishes changes within existing zones
-	To publish new zones, run dyn_publish_zone
-	Checking for pending changes
-	dyn_api $dyn_api/ZoneChanges/$domain | jq'
-dyn_api -X PUT --data '{"publish":true,"zone":"'$domain'"}' $dyn_api/Zone/$domain/ | jq .msgs[].INFO
-}
-
-function dyn_publish_zone () {
-# This publishes new zones. Not changes within existing zones
-dyn_api -X PUT --data '{"publish":true}' $dyn_api/Zone/$domain/ | jq .msgs[].INFO
-}
-
-function dyn_list_nodes () {
-dyn_api $dyn_api/NodeList/$domain
-}
-
-function dyn_delete_cname () {
-node=$1 $id=$2
-dyn_api -X DELETE https://api.dynect.net/REST/CNAMERecord/$domain/$1
-}
-
-function dyn_delete_node () {
-node=${1:-None}
-[[ x$node == x$domain ]] && return 255
-dyn_api -X DELETE https://api.dynect.net/REST/Node/$domain/$node
-}
-
-dyn_ls_domains ()
-{
-    dyn token 1>&2 || return
-    local cache=${dyn_domains_dir}/all.domains
-    if ! dyn_is_fresh $cache; then
-        if res=$(dyn_api $dyn_api/REST/Zone/) ; then
-			echo $res > $cache
+.rdata = [ ( 
+		.rdata | keys[] as $k |
+		if .[$k]|type=="number" 
+		then 
+			$k + "=" + ( .[$k] | tostring ) 
 		else
-			return 1;
-		fi
-    fi
-    jq -r .data[] $cache | xargs -L 1 basename
+			empty 
+		end
+		) ] |
+
+if .rdata | length == 0 then .rdata="-" else .rdata=( .rdata | join(",") ) end |
+
+.zone , " " , .record_id , " " , .fqdn , " " , .record_type , " " , (.ttl|tostring) , " " , .rdata , " " , .value ,
+"\n" ' | while 
+read domain id name type ttl rdata value ; do
+	[[ $name == $domain ]] && name=@ || name=${name%.$domain}
+	echo -e "$id \t $name \t $type \t $ttl \t $rdata \t $value"
+done 
 }
 
-
-function dyn_ls_domain () {
-Readme='
-AllRecord/$domain will publish all records
-/REST/ARecord/oskar-test.com/oskar-test.com/253731101'
-
-local domain 
-[[ -n $1 ]] && domain=$1 || return 1
-
-local cache=$dyn_domains_dir/$domain
-
-if ! dyn_is_fresh $cache ; then
-	local res
-	if res=$(dyn_api $dyn_api/REST/AllRecord/$domain/ | jq '{data}') ; then
-		echo $res > $cache
-	else
-		return 2
-	fi
-fi
-{ echo -e "Id \t Name \t Type" ;
-jq -r .data[] $cache |
-cut -d / --output-delimiter=\  -f 3,5,6 |
-while read type name id ; do
-	type=${type%Record}
-	[[ $type =~ SOA|NS ]] && continue
-	[[ $name =~ ^$domain$ ]] && name=@
-	[[ $name =~ .+$domain$ ]] && name=${name%.$domain}
-	echo -e "$id \t $name \t $type"
-done ; } | tabs2cols 
-}
-
-function dyn_ll_record () {
-local domain id cache
-[[ -z $2 ]] && id=$2 || return 1
+function dyn_ll () {
+local domain ids id name type cache
+[[ -n $2 ]] || return 1
 domain=$1
-cache=$dyn_domains_dir/$id
-if ! dyn_is_fresh $cache ; then
-	local name type
-	read id name type < <(dyn ll $domain | egrep '^$id\s')
-	[[ -z $name ]] && return 2
-	[[ $name == @ ]] && name=$domain || name=${name}.$domain
+shift
+if [[ $1 == all ]] ; then
+	ids=$(dyn ls $domain | egrep -o '^[0-9]+')
+elif [[ $1 == naked ]] ; then
+	ids=$(dyn ls $domain |  egrep '\s+@\s+A\b' | egrep -o '^[0-9]+' )
+else 
+	ids=$*
 fi
 
-}
+local domain_ls=$(dyn_ls_domain $domain)
+for id in $ids ; do
+	export cache=$dyn_work_dir/${domain}.$id
+	rm -f $cache
+	local name type
+	read id name type < <(echo "$domain_ls" | egrep "^$id\s")
+	[[ -z $name ]] && continue 
+	[[ $name == @ ]] && name=$domain || name=${name}.$domain
 
-function dyn_records_print () {
-local json domain record records
-json="$*"
-domain=$(jq -e -r -n "$json | .domain") || return 1
-records=$( dyn_records_list "$json" | jq -r .data[] )
+	( # start subshell 
+	# Every background request should have its own token/session to avoid rate limit
+	unset dyn_token 
+	dyn_api https://api.dynect.net/REST/${type}Record/${domain}/${name}/${id} > $cache || rm -f $cache
+	dyn token kill
+	)& # end subshell
 
-for record in $records ; do
-record=${record#/}
-dyn_api https://api.dynect.net/$record |
-jq  -r '.data | .extra_keys="DNS Made Easy" |
-.id=.record_id | .domain=.zone | .name=(.fqdn | sub("\\.?'$domain'$";"")) | .type=.record_type|
-.value = 
-(if .rdata | has("cname") then .rdata.cname 
-elif .rdata | has("address") then .rdata.address 
-elif .rdata | has("txtdata") then .rdata.txtdata
-elif .rdata | has("nsdname") then .rdata.nsdname 
-else "" end)'
-
-done
-}
-
-function dyn_records_format () {
-local records=$( dyn_records_list $domain | jq -r .data[] )
-
-echo https://manage.dynect.net/qcke/$domain
-echo
-for record in $records ; do
-dyn_api https://api.dynect.net$record |
-jq -c -r '.data | "\(.record_id)  \(if .fqdn == "'$domain'" then "@" else .fqdn | sub("'.$domain'";"") end )   \(.record_type)  \"\(.rdata[])\""' |
-xargs printf '%-11s %-44s %-11s %s\n\n'
-
-done
+	sleep .02
+done | cat
+wait
+{ echo -e "Id \t Name \t Type \t TTL \t Rdata \t Target/Value" ;
+for id in $ids ; do
+	cache=$dyn_work_dir/${domain}.$id
+	cat $cache
+	rm -f $cache
+done | dyn_js2table ; } | tabs2cols
 }
 
 function dyn_domain_add () {
-local data=$( jq -n '. | .rname="dnsadmin.spotoption.com" | .ttl=1800' )
-# Output {"rdata":{"rname":"dnsadmin.spotoption.com"},"ttl":1800}
-dyn_api --data "$data" $dyn_api/Zone/$domain/ | jq
-dyn_publish_changes
+[[ -n $3 ]] && local domain=$1 rname=$2 ttl=$3 || return 1
+local data=$( jq -c --arg rname $rname --arg ttl $ttl -n '{$rname, ttl: $ttl|tonumber }' )
+dyn_debug '
+	Output: {"rname":"dnsadmin.spotoption.com","ttl":1800}'
+dyn_api -X POST --data "$data" $dyn_api/REST/Zone/$domain/ | jq
+
+dyn publish zone $domain
+dyn token kill
 }
 
-function dyn_record_get () {
-local musing='
-	dyn_api -X GET $dyn_api/$rec 
-	/REST/CNAMERecord/oskar-test.com/spotplatform.oskar-test.com/198286304
-	I cant decide whether this function should construct the full url or receive it ready or both'
-
-local api_path=${1:-None} type=${2:-None}
-if echo $1 | egrep -q 'REST/' ; then
-	api_path=$(api_path $api_path)
-else
-	api_path=$dyn_api/REST/${type}/$domain/$api_path
-fi
-
-local domain=$(echo $api_path | egrep -o '(/[^/]+){3}$' )
-[[ -z $domain ]] && return 1
-local id=$( basename $api_path)
-domain=$( echo $domain | cut -d/ -f2)
-local rcrd_cache=${DYNDNS_TMP_DIR}/${domain}.${id}
-
-if is_json $rcrd_cache  && ( [[ -n $dyn_autorefresh ]] && find $rcrd_cache -mmin -${dyn_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
-then
-	/bin/cat $rcrd_cache 
-else
-	local logic='If nothing returned, file empty and fails is_json test'
-	dyn_api -X GET $api_path | jq '.data' | tee $rcrd_cache
-fi
+function dyn_domain_rm () {
+[[ -n $1 ]] && local domain=$1 || return 1
+dyn_api -X DELETE  $dyn_api/REST/Zone/$domain/ 
 }
 
-function dyn_configure_record () {
-local fqdn=$1 id
-: << EOF
-spotplatform.oskar-test.com
-spotplatform.oskar-test.com/198286304
-/REST/CNAMERecord/oskar-test.com/spotplatform.oskar-test.com/198286304
+function dyn_record_rm () {
+	[[ -n $2 ]] && local domain id ids fqdn name type
+	domain=$1
+	shift
+	ids=$*
+	for id in $ids ; do
+		read id name type < <(dyn_ls_domain $domain | egrep "^$id\s")
+		[[ -z $name ]] && continue
+		[[ $name == @ ]] && fqdn=$domain || fqdn=${name}.$domain
+		dyn_api -X DELETE https://api.dynect.net/REST/${type}Record/${domain}/$fqdn/$id
+	done
+	dyn publish changes $domain
+}
+
+function dyn_record_mk () {
+local domain=$1
+shift
+
+local name=$1 id
+local format='
+	spotplatform
+	spotplatform/198286304
+	@
+	@/12345678'
+
+id=$( echo $name | egrep -o '/[0-9]+/?$' | egrep -o '[0-9]+' )
+name=$( echo $name | sed -r 's,/[0-9]+/?$,,' | egrep -o '[^/]+$')
+
+local fqdn
+local logic='
+	spotplatform	-> spotplatform.oskar-test.com
+	@				-> oskar-test.com'
+if [[ $name == @ ]] ; then
+	fqdn=$domain
+else
+	fqdn=$name.$domain
+fi 
+shift
+
+declare -u type=$1
+if ! [[ $type =~ ^(A|CNAME|TXT)$ ]] ; then
+	cat <<EOF 1>&2
+Record type $type not supported
+Currently supported type are A,CNAME,TXT 
+For other types use function  dyn api 
+For more instructions consult API Knowledge Base https://help.dyn.com/rest-resources/
 EOF
+	return 1
+fi
+shift
 
-id=$( echo $fqdn | egrep -o '/[0-9]+/?$' | egrep -o '[0-9]+' )
-fqdn=$( echo $fqdn | sed -r 's,/[0-9]+/?$,,' | egrep -o '[^/]+$')
+local rdata_value=$1
+shift
 
-local fqdn=$( sed -r  "/$domain(\.)?$/q  ; s/(\.)?$/.$domain/" <<< ${fqdn/@/$domain})
-: << EOF
-spotplatform.yingtrader.com  -> spotplatform.yingtrader.com
-spotplatform                 -> spotplatform.yingtrader.com
-@                            -> yingtrader.com
-EOF
-
-declare -u type=$2
-local rdata_value=$3
-local ttl=${4:-1800}
+local ttl=${1:-1800}
 
 case $type in
 	TXT)
@@ -271,95 +151,43 @@ case $type in
 		rdata_key=address
 		;;
 esac
-local data=$( jq -n .rdata.$rdata_key='"'$rdata_value'" | .ttl='$ttl )
+local data=$( args2json rdata.$rdata_key=$rdata_value ttl=$ttl)
 
-if [[ x$1 == x@aaa ]] ; then
-	dyn_api -X POST --data "$data" $dyn_api/${type}Record/$domain/$fqdn/ | jq # CNAMERecord, ARecord, TXTRecord
-	return
+dyn_debug 'If naked, then do it right away'
+if [[ x$fqdn == x$domain ]] ; then
+	dyn_api -X POST --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/ && # CNAMERecord, ARecord, TXTRecord
+	dyn publish changes $domain
 fi
 
-# If we have the record id, we just go straight to update it and then exit
+dyn_debug 'If we have the record id, we just go straight to update it and then exit'
 if [[ -n $id ]] ; then
-	dyn_api -X PUT --data "$data" $dyn_api/${type}Record/$domain/$fqdn/$id | jq 
-	return
+	dyn_api -X PUT --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/$id &&
+	dyn publish changes $domain
 fi
 
-local res record_count record_id 
-# /REST/ARecord/oskar-test.com/oskar-test.com/253731101
-res=$(dyn_records_list '{"domain":"'$domain'"}' | jq -r .data[] | grep -F "/$domain/$fqdn/" )
-record_count=$( echo "$res" | grep -F -c "/$domain/$fqdn/" )
-
-
-# The order is important because of naked records. The order should be count==0, then fqdn==domain (naked)
-if [[ $record_count == 0 ]] ; then
-	dyn_api -X POST --data "$data" $dyn_api/${type}Record/$domain/$fqdn/ | jq 
-elif [[ x$fqdn == x$domain ]] ; then
-	for rcrd in $res ; do
-		echo $rcrd
-		if dyn_record_get $rcrd | jq -r '.data.rdata[] |.. ' | egrep -q -w "$rdata_value" ; then
-			echo update $rdata_value $(api_path $rcrd)
-			dyn_api -X PUT --data "$data" $(api_path $rcrd) | jq 
-			return
-		fi
-	done
-	dyn_api -X POST --data "$data" $dyn_api/${type}Record/$domain/$fqdn/ | jq ; set +x
-elif (( record_count == 1 )) ; then
-	dyn_api -X PUT --data "$data" $(api_path $res) | jq # CNAMERecord, ARecord, TXTRecord
-else
-    echo Something is wrong. $record_count identical records $record_name
-    return 1
+local res=$(dyn_tmpfile)
+dyn_api -X POST --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/ >$res 2>&1 
+local exit_code=$?
+if [[ x$exit_code == x0 ]] ; then
+	dyn publish changes $domain
+	# rm -f $res
+	return 0
 fi
-}
 
-function dyn_is_fresh () {
-# If local copy is fresh, returns 0
-# If returns 1, need to download again
+local error=$(jq -r .msgs[].INFO $res | egrep -o "Cannot.*")
+case "$error" in
+	"Cannot duplicate existing record data")
+		;;&
+	"Cannot add a CNAME at a node with data")
+		id=$(dyn ls $domain | egrep "\s$name\s+$type\b" | egrep -o ^[0-9]+)
+		;;
+esac
 
-# if doesn't exist as file
-	[[ -n $1 && -f $1 ]] || return 1
-# if not json
-	/bin/cat $1 2> /dev/zero | is_json || return 1
-# if no refresh is set, use local copy
-	[[ -z $dyn_refresh ]] && return 0
-# if file is older than refresh
-	find $1 -mmin -$dyn_refresh 2>/dev/zero | egrep -q [a-z]+ || return 1
-}
-
-function dyn_ll () {
-if [[ -z $1 || $1 == domains ]] ; then
-	dyn_ll_domains
-	return
+if ! [[ $(echo $id | wc -w ) == 1 ]] ; then
+	echo Error: $(echo $id | wc -w ) records found
+	return 1
 fi
+dyn_api -X PUT --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/$id &&
+dyn publish changes $domain
 }
 
-
-function dyn () {
-
-dyn_refresh=3
-
-dyn_work_dir=/dev/shm/$USER/dyn
-dyn_domains_dir=$dyn_work_dir/domains
-dyn_work_dir=$dyn_work_dir/run
-mkdir -p $dyn_work_dir $dyn_domains_dir
-
-dyn_cfg
-
-local action=$1
-shift
-case x$action in
-	xdomain|xrecord|xcache|xtoken)
-		action=${action}_$1
-		shift
-		dyn_$action "$@" 
-		# dyn ll cache -> dyn_ll_cache
-		# dyn domain rm 12345 -> dyn_domain_rm 12345
-		;;
-	x)
-		;;
-	*)
-		dyn_$action "$@" 
-		# dyn ll -> dyn_ll
-		# dyn ll 12345 -> dyn_ll 12345
-		;;
-esac	
-} # end function dyn

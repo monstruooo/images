@@ -1,0 +1,137 @@
+#!/bin/bash
+
+info='
+	dyn_api is both function that runs curl and the url of the api
+
+	http://dyn.com/blog/dynect-api-example-curl-managed-dns-aws-heroku-devops/
+	DynECT Managed DNS API: Get Started Using CURL, Java or Python'
+
+export dyn_api=https://api.dynect.net
+
+function dyn_cfg () {
+[[ -z $dyn_customer ]] && read -p 'Customer: ' dyn_customer
+[[ -z $dyn_user ]] && read -p 'User: ' dyn_user
+[[ -z $dyn_pwd ]] && read -s -p 'Password: ' dyn_pwd
+}
+
+function dyn_token_get () {
+if [[ -n $dyn_token ]] ; then
+	(( $(date +%s) - ${dyn_token_ts:-0} < 300 )) && return 0
+	dyn_token_revive && { export dyn_token_ts=$(date +%s) ; return 0 ; }
+fi
+local data=$( jq -n '.customer_name="'$dyn_customer'" |
+.user_name="'${dyn_user}'" | 
+.password="'${dyn_pwd}'"' )
+res=$(curl -Ss -H content-type:application/json --data "$data" -X POST $dyn_api/REST/Session)
+dyn_token=$( echo $res | jq -e -r .data.token ) && export dyn_token dyn_token_ts=$(date +%s) 
+# function returns error if jq fails
+}
+
+function dyn_token_kill () {
+# destroy token
+curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token -X DELETE $dyn_api/REST/Session |
+jq -e -r .status 2>/dev/zero | egrep -q success 	
+}
+
+function dyn_token_revive () {
+curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token -X PUT $dyn_api/REST/Session |
+jq -e -r .status 2>/dev/zero | egrep -q success 	
+}
+
+function dyn_api () {
+dyn_token_get
+local res exit_code
+res=$( curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token "$@" 2>&1)
+exit_code=$?
+if [[ x$exit_code != x0 ]] ; then
+	echo Curl error mesg: $res 1>&2
+	echo Curl error code: $exit_code 1>&2
+	return $exit_code
+fi	
+# set +x ; echo 
+if echo $res | jq -e -r .status 2>/dev/zero | egrep -q success ; then
+	echo $res | jq .
+	return 0
+elif echo $res | fgrep -q '<html>' ; then
+	echo $res | lynx -dump --stdin 1>&2 || echo $res 1>&2
+	return 1
+elif echo $res | is_json ; then
+	# echo $res | jq '.msgs[] | .INFO' 1>&2 
+	echo $res | jq . 1>&2 
+	return 1
+fi
+}
+
+function dyn_publish () {
+local info='
+	Checking for pending changes
+	dyn_api $dyn_api/REST/ZoneChanges/$domain | jq'
+[[ -n $2 ]] && local domain=$2 || return 1
+if [[ $1 == zone ]] ; then
+	# to publish new zone
+	dyn_api -X PUT --data '{"publish":true,"zone":"'$domain'"}' $dyn_api/REST/Zone/$domain/ 
+elif [[ $1 == changes ]] ; then
+	dyn api -X PUT --data '{"publish":true}' $dyn_api/REST/Zone/$domain/
+fi | jq .msgs[].INFO
+}
+
+dyn_ls ()
+{
+if [[ -z $1 ]] ; then
+	dyn_api $dyn_api/REST/Zone/ | jq -r .data[] $cache | xargs -L 1 basename
+	return
+fi
+
+local domain=$1 id name type
+
+{ echo -e "Id \t Name \t Type" ;
+dyn_api $dyn_api/REST/AllRecord/$domain/ | jq '{data}' |
+jq -r .data[] |
+cut -d / --output-delimiter=\  -f 3,5,6 |
+while read type name id ; do
+	type=${type%Record}
+	[[ $type =~ SOA|NS ]] && continue
+	[[ $name =~ ^$domain$ ]] && name=@
+	[[ $name =~ .+$domain$ ]] && name=${name%.$domain}
+	echo -e "$id \t $name \t $type"
+done ; } | tabs2cols 
+}
+
+function dyn_debug () {
+[[ x$dyn_debug =~ x[Oo][Nn] ]] && echo $*
+}
+
+function dyn_tmpfile () {
+	echo $dyn_work_dir/${FUNCNAME[1]}.$BASHPID
+}
+
+function dyn () {
+
+dyn_debug=off
+dyn_work_dir=/dev/shm/$USER/dyn
+dyn_domains_dir=$dyn_work_dir/domains
+dyn_work_dir=$dyn_work_dir/run
+export dyn_refresh dyn_debug dyn_domains_dir dyn_work_dir  
+mkdir -p $dyn_work_dir $dyn_domains_dir
+
+dyn_cfg
+
+local action=$1
+shift
+case x$action in
+	xdomain|xrecord|xcache|xtoken)
+		action=${action}_$1
+		shift
+		dyn_$action "$@" 
+		# dyn ll cache -> dyn_ll_cache
+		# dyn domain rm 12345 -> dyn_domain_rm 12345
+		;;
+	x)
+		;;
+	*)
+		dyn_$action "$@" 
+		# dyn ll -> dyn_ll
+		# dyn ll 12345 -> dyn_ll 12345
+		;;
+esac	
+} # end function dyn
