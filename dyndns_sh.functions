@@ -29,11 +29,13 @@ dyn_token=$( echo $res | jq -e -r .data.token ) && export dyn_token dyn_token_ts
 
 function dyn_token_kill () {
 # destroy token
+[[-n $dyn_token ]] || return
 curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token -X DELETE $dyn_api/REST/Session |
-jq -e -r .status 2>/dev/zero | egrep -q success 	
+jq -e -r .status 2>/dev/zero | egrep -q success && unset $dyn_token 	
 }
 
 function dyn_token_revive () {
+[[-n $dyn_token ]] || return
 curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token -X PUT $dyn_api/REST/Session |
 jq -e -r .status 2>/dev/zero | egrep -q success 	
 }
@@ -49,6 +51,7 @@ if [[ x$exit_code != x0 ]] ; then
 	return $exit_code
 fi	
 # set +x ; echo 
+# login: There was a problem with your credentials
 if echo $res | jq -e -r .status 2>/dev/zero | egrep -q success ; then
 	echo $res | jq .
 	return 0
@@ -75,10 +78,10 @@ elif [[ $1 == changes ]] ; then
 fi | jq .msgs[].INFO
 }
 
-dyn_ls ()
+dyn_domain_ls ()
 {
 if [[ -z $1 ]] ; then
-	dyn_api $dyn_api/REST/Zone/ | jq -r .data[] $cache | xargs -L 1 basename
+	dyn_api $dyn_api/REST/Zone/ | jq -r .data[] | cut -d/ -f4
 	return
 fi
 
@@ -97,6 +100,97 @@ while read type name id ; do
 done ; } | tabs2cols 
 }
 
+function dyn_record2table () {
+# jq .data.rdata | jq --stream -j  'select((.[1]|type)=="number") | .[0][],"=",.[1],"," '
+# jq -j '.data.rdata | (keys[] as $k | $k, "=", .[$k],","),"\n" '
+cat /dev/stdin | 
+jq -c -j ' .data |
+
+.value = (.rdata | .. | strings) |
+
+.rdata = [ ( 
+		.rdata | keys[] as $k |
+		if .[$k]|type=="number" 
+		then 
+			$k + "=" + ( .[$k] | tostring ) 
+		else
+			empty 
+		end
+		) ] |
+
+if .rdata | length == 0 then .rdata="-" else .rdata=( .rdata | join(",") ) end |
+
+.zone , " " , .record_id , " " , .fqdn , " " , .record_type , " " , (.ttl|tostring) , " " , .rdata , " " , .value ,
+"\n" ' | while 
+read domain id name type ttl rdata value ; do
+	[[ $name == $domain ]] && name=@ || name=${name%.$domain}
+	echo -e "$id \t $name \t $type \t $ttl \t $rdata \t $value"
+done 
+}
+
+function dyn_record_ls () {
+local domain ids 
+if [[ -z $2 ]] ; then
+	cat << EOF 1>&2
+Usage: <command> <domain> all
+       <command> <domain> naked
+       <command> <domain> <record1 id> <record2 id> ...
+EOF
+	return 1
+fi
+domain=$1
+shift
+
+local domain_ls=$(dyn_ls_domain $domain) ids 
+if [[ $1 == all ]] ; then
+	ids=$(dyn ls $domain | egrep -o '^[0-9]+')
+else 
+	ids=$( echo "$domain_ls" | egrep "$1" | egrep -o '^[0-9]+')
+fi
+
+local id name type cache
+for id in $ids ; do
+	local name type
+	read id name type < <(echo "$domain_ls" | awk '{if ($1 == "'$id'" ) print }')
+	[[ -z $name ]] && continue 
+	[[ $name == @ ]] && name=$domain || name=${name}.$domain
+
+	local cache=$dyn_domains_dir/${domain}.$id
+	export cache
+	[[ x$dyn_use_cache =~ x[Oo][Nn] ]] && jq -e -r .status $cache 2>/dev/zero | egrep -q success
+	local exit_code=$?
+	if [[ x$exit_code == x0 ]] ; then
+		continue
+	fi
+
+	# start background subshell 
+	( 
+	unset dyn_token # Every background request should have its own token/session to avoid rate limit
+	dyn_api https://api.dynect.net/REST/${type}Record/${domain}/${name}/${id} > $cache || rm -f $cache
+	dyn token kill
+	)& 
+	# end subshell
+
+	sleep .02
+done | cat
+wait
+{ echo -e "Id \t Name \t Type \t TTL \t Rdata \t Target/Value" ;
+for id in $ids ; do
+	cache=$dyn_domains_dir/${domain}.$id
+	jq -e . $cache || return
+done | dyn_record2table ; } | tabs2cols
+}
+
+function dyn_ls () {
+if [[ -n $2 ]] ; then
+	dyn_record_ls $@
+elif [[ $1 == cache ]] ; then
+	fgrep -l  '"rdata"' /dev/shm/oskars/dyn/domains/* | sort
+else
+	dyn_domain_ls $@
+fi
+}
+
 function dyn_debug () {
 [[ x$dyn_debug =~ x[Oo][Nn] ]] && echo $*
 }
@@ -107,11 +201,12 @@ function dyn_tmpfile () {
 
 function dyn () {
 
-dyn_debug=off
+# export dyn_debug=off
+# export dyn_use_cache=on
 dyn_work_dir=/dev/shm/$USER/dyn
 dyn_domains_dir=$dyn_work_dir/domains
 dyn_work_dir=$dyn_work_dir/run
-export dyn_refresh dyn_debug dyn_domains_dir dyn_work_dir  
+export dyn_domains_dir dyn_work_dir  
 mkdir -p $dyn_work_dir $dyn_domains_dir
 
 dyn_cfg

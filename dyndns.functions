@@ -1,73 +1,5 @@
 #!/bin/bash
 
-function dyn_js2table () {
-# jq .data.rdata | jq --stream -j  'select((.[1]|type)=="number") | .[0][],"=",.[1],"," '
-# jq -j '.data.rdata | (keys[] as $k | $k, "=", .[$k],","),"\n" '
-cat /dev/stdin | 
-jq -c -j ' .data |
-
-.value = (.rdata | .. | strings) |
-
-.rdata = [ ( 
-		.rdata | keys[] as $k |
-		if .[$k]|type=="number" 
-		then 
-			$k + "=" + ( .[$k] | tostring ) 
-		else
-			empty 
-		end
-		) ] |
-
-if .rdata | length == 0 then .rdata="-" else .rdata=( .rdata | join(",") ) end |
-
-.zone , " " , .record_id , " " , .fqdn , " " , .record_type , " " , (.ttl|tostring) , " " , .rdata , " " , .value ,
-"\n" ' | while 
-read domain id name type ttl rdata value ; do
-	[[ $name == $domain ]] && name=@ || name=${name%.$domain}
-	echo -e "$id \t $name \t $type \t $ttl \t $rdata \t $value"
-done 
-}
-
-function dyn_ll () {
-local domain ids id name type cache
-[[ -n $2 ]] || return 1
-domain=$1
-shift
-if [[ $1 == all ]] ; then
-	ids=$(dyn ls $domain | egrep -o '^[0-9]+')
-elif [[ $1 == naked ]] ; then
-	ids=$(dyn ls $domain |  egrep '\s+@\s+A\b' | egrep -o '^[0-9]+' )
-else 
-	ids=$*
-fi
-
-local domain_ls=$(dyn_ls_domain $domain)
-for id in $ids ; do
-	export cache=$dyn_work_dir/${domain}.$id
-	rm -f $cache
-	local name type
-	read id name type < <(echo "$domain_ls" | egrep "^$id\s")
-	[[ -z $name ]] && continue 
-	[[ $name == @ ]] && name=$domain || name=${name}.$domain
-
-	( # start subshell 
-	# Every background request should have its own token/session to avoid rate limit
-	unset dyn_token 
-	dyn_api https://api.dynect.net/REST/${type}Record/${domain}/${name}/${id} > $cache || rm -f $cache
-	dyn token kill
-	)& # end subshell
-
-	sleep .02
-done | cat
-wait
-{ echo -e "Id \t Name \t Type \t TTL \t Rdata \t Target/Value" ;
-for id in $ids ; do
-	cache=$dyn_work_dir/${domain}.$id
-	cat $cache
-	rm -f $cache
-done | dyn_js2table ; } | tabs2cols
-}
-
 function dyn_domain_add () {
 [[ -n $3 ]] && local domain=$1 rname=$2 ttl=$3 || return 1
 local data=$( jq -c --arg rname $rname --arg ttl $ttl -n '{$rname, ttl: $ttl|tonumber }' )
@@ -76,7 +8,6 @@ dyn_debug '
 dyn_api -X POST --data "$data" $dyn_api/REST/Zone/$domain/ | jq
 
 dyn publish zone $domain
-dyn token kill
 }
 
 function dyn_domain_rm () {
@@ -98,19 +29,19 @@ function dyn_record_rm () {
 	dyn publish changes $domain
 }
 
-function dyn_record_mk () {
+function dyn_record_add () {
 local domain=$1
 shift
 
 local name=$1 id
 local format='
 	spotplatform
-	spotplatform/198286304
+	198286304/spotplatform
 	@
-	@/12345678'
+	12345678/@'
 
-id=$( echo $name | egrep -o '/[0-9]+/?$' | egrep -o '[0-9]+' )
-name=$( echo $name | sed -r 's,/[0-9]+/?$,,' | egrep -o '[^/]+$')
+id=$( echo $name | egrep -o '[0-9]+/' | egrep -o '[0-9]+' )
+name=$( echo $name | sed -r 's,[0-9]+/,,')
 
 local fqdn
 local logic='
@@ -153,38 +84,36 @@ case $type in
 esac
 local data=$( args2json rdata.$rdata_key=$rdata_value ttl=$ttl)
 
-dyn_debug 'If naked, then do it right away'
-if [[ x$fqdn == x$domain ]] ; then
-	dyn_api -X POST --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/ && # CNAMERecord, ARecord, TXTRecord
-	dyn publish changes $domain
-fi
-
 dyn_debug 'If we have the record id, we just go straight to update it and then exit'
 if [[ -n $id ]] ; then
 	dyn_api -X PUT --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/$id &&
 	dyn publish changes $domain
+	return
+fi
+
+dyn_debug 'If naked, then do it right away'
+if [[ x$fqdn == x$domain ]] ; then
+	dyn_api -X POST --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/ && # CNAMERecord, ARecord, TXTRecord
+	dyn publish changes $domain
+	return
 fi
 
 local res=$(dyn_tmpfile)
-dyn_api -X POST --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/ >$res 2>&1 
+dyn_api -X POST --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/ 
 local exit_code=$?
 if [[ x$exit_code == x0 ]] ; then
 	dyn publish changes $domain
-	# rm -f $res
 	return 0
+else
+	echo ; cat << EOF | egrep --color '.*' ; echo
+	Creating new record failed
+	Trying to find and update existing record
+EOF
 fi
 
-local error=$(jq -r .msgs[].INFO $res | egrep -o "Cannot.*")
-case "$error" in
-	"Cannot duplicate existing record data")
-		;;&
-	"Cannot add a CNAME at a node with data")
-		id=$(dyn ls $domain | egrep "\s$name\s+$type\b" | egrep -o ^[0-9]+)
-		;;
-esac
-
-if ! [[ $(echo $id | wc -w ) == 1 ]] ; then
-	echo Error: $(echo $id | wc -w ) records found
+id=$(dyn ls $domain | egrep "\s$name\s+$type\b" | egrep -o ^[0-9]+)
+if ! [[ x$id =~ ^x[0-9]+$ ]] ; then
+	echo Error: $(echo $id | wc -w ) existing records found $id
 	return 1
 fi
 dyn_api -X PUT --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/$id &&
