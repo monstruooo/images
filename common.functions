@@ -98,11 +98,11 @@ jq -n --arg array "$array" {${arrname}': $array  | split("\n")}'
 }
 
 function is_json () {
-/bin/cat /dev/stdin | jq -e type 2>/dev/zero | egrep -q 'array|object' 2>/dev/zero
+/bin/cat /dev/stdin | jq -e -r type 2>/dev/zero | egrep -q '[a-z]+' 2>/dev/zero
 }
 
 function jqres () {
-local json=$(args_to_json "$@")
+local json=$(args2json "$@")
 jq -n "$json | { res: . }"
 }
 
@@ -118,7 +118,18 @@ done
 
 } # end function
 
-function args_to_json () {
+function to_jsonarray () {
+local a
+cat /dev/stdin |
+xargs  printf '%s\n'  | 
+while read -r a ; do 
+	echo "$a" |
+	jq . 2>/dev/zero || echo "$a" | jq -R .
+done | 
+jq -s -c
+}
+
+function args2json () {
 local usage='
 	This function accepts arguments as domain=oskar-test.com id=12 etc
 	It automatically identifies the json type of value. Basically its only quoting strings.
@@ -137,7 +148,7 @@ for arg in "$@" ; do
 	echo "$value" | jq -e type 2>/dev/zero | egrep -q '[a-z]' || value=$(echo $value | jq -R .)
 	json=$( jq -n "$json | .$key=$value")
 done  
-echo $json | jq .
+echo $json | jq -c .
 } # end function
 
 function json_dump_py () {
