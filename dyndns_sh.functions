@@ -29,13 +29,13 @@ dyn_token=$( echo $res | jq -e -r .data.token ) && export dyn_token dyn_token_ts
 
 function dyn_token_kill () {
 # destroy token
-[[-n $dyn_token ]] || return
+[[ -n $dyn_token ]] || return
 curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token -X DELETE $dyn_api/REST/Session |
-jq -e -r .status 2>/dev/zero | egrep -q success && unset $dyn_token 	
+jq -e -r .status 2>/dev/zero | egrep -q success && unset dyn_token 	
 }
 
 function dyn_token_revive () {
-[[-n $dyn_token ]] || return
+[[ -n $dyn_token ]] || return
 curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token -X PUT $dyn_api/REST/Session |
 jq -e -r .status 2>/dev/zero | egrep -q success 	
 }
@@ -53,15 +53,23 @@ fi
 # set +x ; echo 
 # login: There was a problem with your credentials
 if echo $res | jq -e -r .status 2>/dev/zero | egrep -q success ; then
-	echo $res | jq .
+	if [[ x$dyn_debug =~ x[Oo][Nn] ]] ; then
+		echo $res | jq -c 
+	else
+		echo $res |
+		jq -e '{ function: "'${FUNCNAME[0]}'" , msgs: [.msgs[].INFO]  , data }'
+	fi
 	return 0
 elif echo $res | fgrep -q '<html>' ; then
 	echo $res | lynx -dump --stdin 1>&2 || echo $res 1>&2
 	return 1
 elif echo $res | is_json ; then
-	# echo $res | jq '.msgs[] | .INFO' 1>&2 
-	echo $res | jq . 1>&2 
-	return 1
+	if [[ x$dyn_debug =~ x[Oo][Nn] ]] ; then
+		echo $res | jq -c 1>&2
+	else
+		echo $res | jq -e -r '{ function: "'${FUNCNAME[0]}'" , msgs: [.msgs[].INFO] }' | egrep --color '.*' 1>&2
+		return 1
+	fi
 fi
 }
 
@@ -75,7 +83,7 @@ if [[ $1 == zone ]] ; then
 	dyn_api -X PUT --data '{"publish":true,"zone":"'$domain'"}' $dyn_api/REST/Zone/$domain/ 
 elif [[ $1 == changes ]] ; then
 	dyn api -X PUT --data '{"publish":true}' $dyn_api/REST/Zone/$domain/
-fi | jq .msgs[].INFO
+fi | jq '{function: "'${FUNCNAME[0]}'" , msgs }'
 }
 
 dyn_domain_ls ()
