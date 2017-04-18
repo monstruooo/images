@@ -1,11 +1,5 @@
 #!/bin/bash 
 
-dnsme_autorefresh=3
-dnsme_autoupdate=ON
-
-function dnsme_autoupdate () {
-	echo $dnsme_autoupdate | egrep -q -i on && return 0 || return 1
-}
 
 function dnsme_cfg () {
 [[ x$1 == set ]] && unset dnsme_api_key dnsme_secret_key
@@ -14,40 +8,50 @@ function dnsme_cfg () {
 } # end function dnsme_configure
 
 function dnsme_url () {
-echo https://cp.dnsmadeeasy.com/dns/managed/$dnsme_dmn_id
+echo https://cp.dnsmadeeasy.com/dns/managed/$dnsme_id
 }
 
-function dnsme_mount () {
-local alias="cd pwd context ll cat mk rm updatedb purge set" cmd
+function dnsme_umount () {
+local alias="cd pwd context ls cat mk rm updatedb purge set" cmd
 if [[ -n $dnsme_ps1_saved ]] ; then
 	PS1="$dnsme_ps1_saved"
 	unset dnsme_ps1_saved
 
-	for cmd in $alias ; do
-		unalias $cmd
-	done
-	eval "$dnsme_alias_saved"
+	if [[ x$dnsme_alias =~ xon|xON ]] ; then
+		for cmd in $alias ; do
+			unalias $cmd
+		done
+		eval "$dnsme_alias_saved"
+	fi
+
 	echo dnsme mount OFF
-else
-	[[ x$2 == x[Oo][Ff][Ff] ]] && { echo dnsme $1 OFF ; return ; }
+fi
+} # end function dnsme_umount
+
+function dnsme_mount () {
+local alias="cd pwd context ls cat mk rm updatedb purge set" cmd
+if [[ -z $dnsme_ps1_saved ]] ; then
 	dnsme_ps1_saved="$PS1"
 	dnsme_alias_saved=$(alias)
 	PS1='$(dnsme pwd) ]$ '
 
-	for cmd in $alias ; do
-		alias $cmd="dnsme $cmd "
-	done
+	if [[ x$dnsme_alias =~ xon|xON ]] ; then
+		for cmd in $alias ; do
+			alias $cmd="dnsme $cmd "
+		done
+	fi
+
 	echo dnsme mount ON
 fi
-} # end function 
+} # end function dnsme_mount
 
 function dnsme_set() {
 /bin/cat <<EOF
-	dnsme_autoupdate    = $dnsme_autoupdate
-	dnsme_autorefresh   = $dnsme_autorefresh
+	dnsme_refresh   	= $dnsme_refresh
 	dnsme_debug         = $dnsme_debug
-	dnsme_dmn           = $dnsme_dmn
-	dnsme_dmn_id        = $dnsme_dmn_id
+	dnsme_alias         = $dnsme_alias
+	dnsme_name          = $dnsme_name
+	dnsme_id            = $dnsme_id
 EOF
 } # end function 
 
@@ -65,42 +69,46 @@ root)
 ;;
 domain)
 	if [[ -n $1 ]] ; then
-		dnsme_get $dnsme_dmn |
+		dnsme_get $dnsme_name |
 		jq '.data[] | select(.id=='$1')'
 	else
-		dnsme_get $dnsme_dmn
+		dnsme_get $dnsme_name
 	fi
 ;;
 esac
 } # end function
 
 function dnsme_context () {
-if [[ -n $dnsme_dmn ]] ; then
+if [[ -n $dnsme_name ]] ; then
 	echo domain
 else
 	echo root
 fi
 } # end function
 
-function dnsme_ll () {
+function dnsme_ls_cache () {
+	grep -l 'type' $dnsme_domains_dir/*
+}
+
+function dnsme_ls () {
 
 case $(dnsme_context) in
 root)
 	if [[ -n $1 ]] ; then  
-	# dnsme:// dnsme ll <domain>
+	# dnsme:// dnsme ls <domain>
 		dnsme get $1 | dnsme_js2table
 	else  
-	# dnsme:// dnsme ll
-		dnsme_ll_domains
+	# dnsme:// dnsme ls
+		dnsme_ls_domains
 	fi
 ;;
 domain)
 	if [[ -n $1 ]] ; then   
-		# dnsme://<domain>:<domain id> dnsme ll <record id>
-		dnsme get $dnsme_dmn | jq -c '.data[]|select(.id|tostring=="'$1'")' |  json2bash
+		# dnsme://<domain>:<domain id> dnsme ls <record id>
+		dnsme get $dnsme_name | jq -c '.data[]|select(.id|tostring=="'$1'")' |  json2bash
 	else
-		# dnsme://<domain>:<domain id> dnsme ll
-		dnsme get $dnsme_dmn | dnsme_js2table
+		# dnsme://<domain>:<domain id> dnsme ls
+		dnsme get $dnsme_name | dnsme_js2table
 	fi
 ;;
 esac
@@ -117,7 +125,7 @@ root)
 	ec=$?
 	;;
 domain)
-	domain=$dnsme_dmn
+	domain=$dnsme_name
 	if (( ${#*} == 4 )) ; then
 		id=$1
 		shift
@@ -135,21 +143,21 @@ domain)
 	ec=$?
 	;;
 esac
-if [[ x$? == x0 ]] && dnsme_autoupdate ; then
+if [[ x$? == x0 && -n $dnsme_refresh ]] ; then
 	dnsme updatedb $domain
 fi
 } # end function dnsme_mk
 
 function dnsme_rm () {
 local name id
-if [[ -z $dnsme_dmn ]] ; then
+if [[ -z $dnsme_name ]] ; then
 	read -r name id < <(dnsme_domain_id $1)
 	[[ -n $name ]] && echo Run manually dnsme_domain_rm id=$id || echo No such domain $1
 else
 	if [[ -n $1 ]] ; then
-		dnsme_record_rm domain=$dnsme_dmn ids="$*"
-		if (( $?==0 )) && dnsme_autoupdate ; then
-			dnsme updatedb $dnsme_dmn
+		dnsme_record_rm domain=$dnsme_name ids="$*"
+		if [[ x$? == x0 && -n $dnsme_refresh ]] ; then
+			dnsme updatedb $dnsme_name
 		fi
 	fi
 fi
@@ -158,39 +166,62 @@ fi
 
 function dnsme_pwd () {
 echo -n dnsme://
-if [[ -n $dnsme_dmn ]] ; then
-	echo -n ${dnsme_dmn}:${dnsme_dmn_id}
+if [[ -n $dnsme_name ]] ; then
+	echo -n ${dnsme_name}:${dnsme_id}
 fi
 echo 
 } # end function dnsme_pwd
 
 function dnsme_cd () {
 if [[ -z $1 || x$1 == x/ ]] ; then 
-	unset dnsme_dmn dnsme_dmn_id
+	unset dnsme_name dnsme_id
 else 
-	read -r dnsme_dmn dnsme_dmn_id < <(dnsme_domain_id $1)
-	[[ -n $dnsme_dmn ]] || { echo No such domain $1 1>&2 ; return 1; } 
+	read -r dnsme_name dnsme_id < <(dnsme_domain_id $1)
+	[[ -n $dnsme_name ]] || { echo No such domain $1 1>&2 ; return 1; } 
 fi
 } # end function
 
-function dnsme () {
-
-dnsme_work_dir=/dev/shm/$USER/dnsme
-mkdir -p $dnsme_work_dir
-
-dnsme_cfg
-local action=$1
-[[ -z $action ]] && action=help
-shift
-dnsme_${action} "$@"
-} # end function dnsme
 	
 function dnsme_updatedb () {
-local dmn=$1 dnsme_autorefresh=0 msg="Updating DNSME cache"
+local dmn=$1 dnsme_refresh=0 msg="Updating DNSME cache"
 
-	[[ -n $dnsme_dmn ]] && dmn=$dnsme_dmn
+	[[ -n $dnsme_name ]] && dmn=$dnsme_name
 	[[ -n $dmn ]] && msg="$msg & Domain $dmn cache"
 
 	echo $msg...
 	dnsme_get $dmn > /dev/zero
 } # end function 
+
+function dnsme () {
+
+dnsme_refresh=3
+dnsme_alias=off
+dnsme_debug=off
+
+dnsme_work_dir=/dev/shm/$USER/dnsme
+dnsme_domains_dir=/dev/shm/$USER/dnsme/domains
+dnsme_work_dir=$dnsme_work_dir/run
+mkdir -p $dnsme_work_dir $dnsme_domains_dir
+
+dnsme_cfg
+
+local action=$1
+shift
+case x$action in
+	xdomain|xrecord|xcache)
+		action=${action}_$1
+		shift
+		dnsme_$action "$@" 
+		# dnsme ls cache -> dnsme_ls_cache
+		# dnsme domain rm 12345 -> dnsme_domain_rm 12345
+	;;
+	x)
+		dnsme_help 
+	;;
+	*)
+		dnsme_$action "$@" 
+		# dnsme ls -> dnsme_ls
+		# dnsme ls 12345 -> dnsme_ls 12345
+	;;
+esac	
+} # end function dnsme

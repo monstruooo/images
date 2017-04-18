@@ -1,15 +1,13 @@
 #!/bin/bash
 
-dnsme_debug=off
-
 function dnsme_debug () {
 	[[ x$dnsme_debug =~ x[Oo][Nn] ]] && echo "$*" 1>&2
 } 
 
 function dnsme_api () {
 
-local dnsme_url=https://api.dnsmadeeasy.com
-[[ x$sandbox == x1 ]] && dnsme_url=https://api.sandbox.dnsmadeeasy.com
+local api_url=https://api.dnsmadeeasy.com
+[[ x$sandbox == x1 ]] && api_url=https://api.sandbox.dnsmadeeasy.com
 
 dnsme_throttle # Checking that the request rate is not exceeded
 
@@ -27,9 +25,9 @@ content_type_H="content-type:application/json"
 accept_type_H="accept:application/json"
 local api_uri=$1
 shift
-api_uri=${api_uri#*/dns/managed/} # backward compatibility for calls that use full url instead of uri
+api_uri=${api_uri#*dnsmadeeasy.com/} # backward compatibility for calls that use full url instead of uri
 
-res=$(curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $dnsme_url/V2.0/dns/managed/$api_uri "$@" 2>&1 ) ||
+res=$(curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $api_url/$api_uri "$@" 2>&1 ) ||
 { code=$? ; jqres code=$code src=${FUNCMAME[0]} msg="Curl failed: $res" 2>&1 ; return $code ; }
 
 if [[ -z $res ]] ; then
@@ -74,18 +72,27 @@ else
 fi
 }
 
+function dnsme_is_fresh () {
+# If local copy is fresh, returns 0
+# If returns 1, need to download again
+
+# if doesn't exist as file
+	[[ -n $1 && -f $1 ]] || return 1
+# if not json
+	/bin/cat $1 2> /dev/zero | is_json || return 1
+# if no refresh is set, use local copy
+	[[ -z $dnsme_refresh ]] && return 0
+# if file is older than refresh
+	find $1 -mmin +${dnsme_refresh:-0} 2>/dev/zero | egrep -q [a-z]+ || return 1
+}
+
 function dnsme_get () {
 local info='
 	If no argument is provided the function exits after pulling the list of domains '
 
-local cache=$dnsme_work_dir/all.domains
-mkdir -p $( dirname $cache)
-local logic='( if cache not json or ( refresh set and cache is older than refresh), then refresh cache
-Also means: if cache is json and refresh unset, then dont refresh cache'
-if ! /bin/cat $cache | is_json || ( [[ -n $dnsme_autorefresh ]] && find $cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ )
-then
-	# echo Updating DNSME domain cache 1>&2
-	dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/ > $cache
+local cache=$dnsme_domains_dir/all.domains
+if ! dnsme is_fresh $cache ; then
+	dnsme_api V2.0/dns/managed/ > $cache
 fi
 
 if [[ -z $1 ]] ; then
@@ -97,7 +104,7 @@ local name id
 read -r name id < <(jq -j '.data[] | select((.id|tostring)=="'$1'" or .name=="'$1'") | .name , " ", .id' $cache)
 [[ -n $id ]] || { jqres code=1 src=${FUNCNAME[0]} msg="No domain with id or name $1" 1>&2 ; return 1 ; }
 
-local dmn_cache=$dnsme_work_dir/$name
+local dmn_cache=$dnsme_domains_dir/$name
 local bash_syntax='
 	find -mmin +3
 		Finds files modified more than 3 minutes ago
@@ -105,8 +112,8 @@ local bash_syntax='
 		Finds files modified less than 3 minutes ago
 	find -mmin -0
 		Never finds anything'
-if ! /bin/cat $dmn_cache 2>/dev/zero | is_json || ( [[ -n $dnsme_autorefresh ]] && find $dmn_cache -mmin +${dnsme_autorefresh:-0} 2>/dev/zero | egrep -q [a-z]+ ) ; then
-	dnsme_api $id/records  > $dmn_cache
+if ! dnsme is_fresh $dmn_cache  ; then
+	dnsme_api V2.0/dns/managed/$id/records  > $dmn_cache
 fi
 jq . $dmn_cache
 } # end function dnsme_get
@@ -115,7 +122,7 @@ function dnsme_domain_id () { local domain_name=$1 domain_id
     dnsme_get | jq -e -j '.data[] | select(.name=="'$1'" or (.id|tostring)=="'$1'") | .name , " " , .id , "\n"' 
 } # end function
 
-function dnsme_ll_domains () {
+function dnsme_ls_domains () {
 	{
 	echo -e "Domain Id \t Domain name" ;
 	dnsme get |
@@ -127,8 +134,8 @@ function dnsme_ll_domains () {
 function dnsme_purge () {
 # purge deleted domains
 local domains cached_domains
-domains=$( dnsme cd ; dnsme ll | awk '{print $2}' | sed 1d )
-cached_domains=$( find $dnsme_work_dir/* | egrep -v 'all.domains|res')
+domains=$( dnsme cd ; dnsme ls | awk '{print $2}' | sed 1d )
+cached_domains=$( find $dnsme_domains_dir/* | egrep -v 'all.domains|res')
 diff -Bb  <( echo "$domains")  <(echo "$cached_domains")  --suppress-common-lines  |
 egrep '^>' | awk '{print $2}' | xargs -L 1 /bin/rm -fv
 }

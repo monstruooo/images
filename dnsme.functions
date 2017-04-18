@@ -22,7 +22,7 @@ tabs2cols
 function dnsme_domain_rm () {
 local id
 args_to_vars "$@"
-dnsme_api $id -X DELETE -d "[$id]"
+dnsme_api V2.0/dns/managed/$id -X DELETE -d "[$id]"
 }
 
 function dnsme_record_rm () {
@@ -33,16 +33,16 @@ read -r domain_id domain_id < <(dnsme_domain_id $domain)
 [[ -z $ids ]] && return 2
 ids=$(echo $ids) # second and every next record id to have exactly one leading space
 ids=${ids// /&ids=}
-dnsme_api $domain_id/records?ids=$ids -X DELETE
+dnsme_api V2.0/dns/managed/$domain_id/records?ids=$ids -X DELETE
 }
 
 function dnsme_domain_mk () {
 local domain json data
 args_to_vars "$@"
-data=$(args_to_json "$@")
+data=$(args2json "$@")
 if [[  -n $domain ]] ; then
 	data=$( jq -n "$data | { name: .domain }")
-    dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/ -X POST -d "$data" | jq .
+    dnsme_api V2.0/dns/managed/ -X POST -d "$data" | jq .
 else
 	return 1
 fi
@@ -51,7 +51,7 @@ fi
 function dnsme_record_mk () {
 local domain id name type value ttl json data
 args_to_vars "$@"
-data=$(args_to_json "$@")
+data=$(args2json "$@")
 
 data=$( echo "$data" | jq 'if .name=="@" then .name="" else . end')
 name=${name/@/}
@@ -93,51 +93,8 @@ if [[ -n $id ]] ; then
     local old_value=$( dnsme_get $domain | $jq -r ".data[] | select(.id==$id) | .value" )
     local data=$(jq -n "$data | .id=$id")
     jqres src=${FUNCNAME[0]} msg="Updating record. No output expected on success" name=$name value=$value old_value=$old_value
-    dnsme_api $domain_id/records/$id -X PUT -d "$data" | jq
+    dnsme_api V2.0/dns/managed/$domain_id/records/$id -X PUT -d "$data" | jq
 else
-    dnsme_api $domain_id/records/ -X POST -d "$data" | jq
+    dnsme_api V2.0/dns/managed/$domain_id/records/ -X POST -d "$data" | jq
 fi
 } # function dnsme_mk
-
-function dnsme_records_print () { 
-local domain json dnsme_args name id type
-
-local info='
-	Backward Compatibility
-	Accepts both json and arguments. 
-	For naked records:
-	dnsme_records_print oskar-test.com @ TXT
-	For all records:
-	dnsme_records_print oskar-test.com "" A'
-
-local name=$1 type=$2
-
-if echo "$1" | is_json ; then
-    json="$1"
-    domain=$(jq -e -n -r "$json | .domain") || return 255
-    type=$(jq -e -n -r "$json | .type") && dnsme_args="type=$type&"
-    name=$(jq -e -n -r "$json | .name") && dnsme_args="$dnsme_args&recordName=${name}&"
-else
-	domain=$1
-	shift
-
-	local logic='
-	recordName=& returns naked records
-	recordName=""& is like recordName=* or All records
-	when recordName= is not present, all records are returned'
-
-    if [[ -n $1 ]] ; then
-		name=$1
-        [[ x$name == x@ ]] && unset name
-        dnsme_args="recordName=${name}&"
-    fi
-    shift
-    [[ -n $1 ]] && dnsme_args="type=$1&$dnsme_args"
-fi
-read -r domain_id domain_id < <(dnsme_domain_id ${domain:-None}) 
-[[ -n $domain_id ]] || return 1
-
-# dnsme_api http://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records?recordName=${record_name}'&'type=$record_type
-dnsme_api https://api.dnsmadeeasy.com/V2.0/dns/managed/$domain_id/records"?${dnsme_args}" |
-$jq -r '.data | sort_by(.type) | { data: . }'
-} # end function
