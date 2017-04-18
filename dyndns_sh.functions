@@ -11,7 +11,7 @@ export dyn_api=https://api.dynect.net
 function dyn_cfg () {
 [[ -z $dyn_customer ]] && read -p 'Customer: ' dyn_customer
 [[ -z $dyn_user ]] && read -p 'User: ' dyn_user
-[[ -z $dyn_pwd ]] && read -s -p 'Password: ' dyn_pwd
+[[ -z $dyn_pwd ]] && { read -s -p 'Password: ' dyn_pwd ; read_nl ; }
 }
 
 function dyn_token_get () {
@@ -42,7 +42,7 @@ jq -e -r .status 2>/dev/zero | egrep -q success
 
 function dyn_api () {
 dyn_token_get
-local res exit_code
+local exit_code
 res=$( curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token "$@" 2>&1)
 exit_code=$?
 if [[ x$exit_code != x0 ]] ; then
