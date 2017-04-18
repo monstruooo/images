@@ -28,8 +28,8 @@ incap_site_add () {
 
 incap_site_rm () {
 [[ -z $1 ]] && return 1
-incap api "site_id=$1" api/prov/v1/sites/delete
-incap ll files sites | egrep ".*_${1}$" | xargs -L 1 rm -v
+incap api "site_id=$1" api/prov/v1/sites/delete | jq .
+incap ls cache sites | egrep ".*_${1}$" | xargs -L 1 rm -v
 }
 
 function incap_site_purge () {

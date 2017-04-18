@@ -58,7 +58,7 @@ if [[ -z $1 ]] ; then
 	return
 fi
 
-incap ll files sites | egrep -e "/${1}_[0-9]+$" -e "/[^/]+_${1}$" | xargs cat
+incap ls cache sites | egrep -e "/${1}_[0-9]+$" -e "/[^/]+_${1}$" | xargs cat
 }
 
 function incap_updatedb () {
@@ -74,7 +74,7 @@ fi
 local account_id 
 local account accounts accounts2 request requests p
 
-accounts=$(incap ll accounts |	egrep -o '^[0-9]+')
+accounts=$(incap ls accounts |	egrep -o '^[0-9]+')
 rm -f $incap_accounts_dir/account_page-[0-9]*
 accounts=" "$(echo $accounts)" " # echo and spaces to allow removing finished accounts as / $account / /
 accounts2=$accounts
@@ -162,7 +162,7 @@ while true ; do
 
 	rm -f $incap_sites_dir/*
 	jq -n '{ message: "Exploding Incapsula configuration. Can take some seconds" , source: "Oskar" }' 1>&2
-	files=$(incap ll files accounts)
+	files=$(incap ls cache accounts)
 	[[ -z $files ]] && { echo No files found. Run incap updatedb ; return 1 ; }
 	for file in $files ; do
 		jq .sites[] $file | incap_site2disk &
@@ -176,7 +176,7 @@ function incap_js_accounts () {
 	incap_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list
 }
 
-function incap_ll_accounts () {
+function incap_ls_accounts () {
 	if [[ -z $1 ]] ; then
 		{ echo -e "Account ID \t Account Name" ;
 		incap js accounts |

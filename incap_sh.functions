@@ -25,11 +25,13 @@ fi
 
 }
 
-function incap_ll () {
+function incap_ls () {
 
-if [[ x$1 == xaccounts ]] ; then
+if [[ x$1 == x ]] ; then
+	printf '%s\n' accounts sites origins cache	
+elif [[ x$1 == xaccounts ]] ; then
 	shift
-	incap_ll_accounts "$@"
+	incap_ls_accounts "$@"
 	return
 elif [[ x$1 == xsites ]] ; then
 	shift
@@ -53,7 +55,7 @@ elif [[ x$1 == xorigins ]] ; then
 		tabs2cols
 	fi
 	return
-elif [[ x$1 == xfiles ]] ; then
+elif [[ x$1 == xcache ]] ; then
 	shift
 	if [[ x$1 == xsites ]] ; then
 		find $incap_sites_dir -regextype posix-extended -regex "\S+/[^/]+_[0-9]+$" | sort -V
