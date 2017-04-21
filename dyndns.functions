@@ -15,13 +15,15 @@ function dyn_rm () {
 shift 
 if [[ -z $1 ]] ; then
 	read -n 1 -p "Press Y/y to delete domain $domain: " ; read_nl
-	[[ x$REPLY == x[Yy] ]] && dyn_api -X DELETE  $dyn_api/REST/Zone/$domain/ 
+	if [[ x$REPLY == x[Yy] ]] ; then
+		dyn_api -X DELETE  $dyn_api/REST/Zone/$domain/ 
+	fi
 	return
 fi
 local id ids fqdn name type
 ids=$*
 for id in $ids ; do
-	read id name type < <(dyn_ls_domain $domain | egrep "^$id\s")
+	read id name type < <(dyn_domain_ls $domain | egrep "^$id\s")
 	[[ -z $name ]] && continue
 	[[ $name == @ ]] && fqdn=$domain || fqdn=${name}.$domain
 	dyn_api -X DELETE https://api.dynect.net/REST/${type}Record/${domain}/$fqdn/$id 
@@ -86,8 +88,9 @@ local data=$( args2json rdata.$rdata_key="$rdata_value" ttl=$ttl)
 
 dyn_debug 'If we have the record id, we just go straight to update it and then exit'
 if [[ -n $id ]] ; then
-	dyn_api -X PUT --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/$id &&
-	dyn publish changes $domain
+	if dyn_api -X PUT --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/$id ; then
+		dyn publish changes $domain
+	fi
 	return
 fi
 
@@ -99,7 +102,7 @@ if [[ x$fqdn == x$domain ]] ; then
 fi
 
 dyn_debug 'Checking if record already exists and has id'
-id=$(dyn ls $domain | egrep "\s$name\s+$type\b" | egrep -o ^[0-9]+)
+id=$(dyn ls $domain | egrep "\s${name//./\\.}\s+$type\b" | egrep -o ^[0-9]+)
 if [[ x$id =~ ^x[0-9]+$ ]] ; then
 	dyn_debug 'One record exists. Updating'
 	dyn_api -X PUT --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/$id
@@ -108,7 +111,7 @@ elif [[ -z $id  ]] ; then
 else
 	jq --arg msg "$id" -n '{ function: "'${FUNCNAME[0]}'", msgs: ["Record id doesnt make sense " + $msg] }'  | egrep --color '.*' 1>&2 
 	return 1
-fi && dyn publish changes $domain
+fi &&  dyn publish changes $domain 
 
 # local tmp=$(dyn_tmpfile)
 }

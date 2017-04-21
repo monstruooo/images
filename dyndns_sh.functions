@@ -8,6 +8,33 @@ info='
 
 export dyn_api=https://api.dynect.net
 
+function dyn_api_path () {
+local domain id name type fqdn
+args2vars "$@" || return 1
+[[ -n $domain ]] || return 1
+if [[ -z $type ]] ; then
+	echo $dyn_api/REST/Zone/$domain
+	return
+fi
+
+[[ -n $name ]] || return 2
+if [[ x$name == x@ ]] ; then
+	fqdn=$domain
+fi
+
+if [[ $name =~ ${domain}$ ]] ; then
+	fqdn=$name
+else
+	fqdn=${name}.$domain 
+fi
+	
+if [[ -n $id ]] ; then
+	echo $dyn_api/REST/${type}Record/${domain}/${fqdn}/${id}
+else
+	echo $dyn_api/REST/${type}Record/${domain}/${fqdn}
+fi	
+}
+
 function dyn_cfg () {
 [[ -z $dyn_customer ]] && read -p 'Customer: ' dyn_customer
 [[ -z $dyn_user ]] && read -p 'User: ' dyn_user
@@ -42,35 +69,35 @@ jq -e -r .status 2>/dev/zero | egrep -q success
 
 function dyn_api () {
 dyn_token_get
-local exit_code
+local exit_code args msgs
+args=$(echo $* | jq -R .)
 res=$( curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token "$@" 2>&1)
 exit_code=$?
 if [[ x$exit_code != x0 ]] ; then
+	msgs=$(echo $res | jq -R .)
+	res_info=$(jq -e '{ args: '"$args"', msgs: ['"$msgs"'] }')
 	echo Curl error mesg: $res 1>&2
 	echo Curl error code: $exit_code 1>&2
 	return $exit_code
 fi	
 # set +x ; echo 
 # login: There was a problem with your credentials
-if echo $res | jq -e -r .status 2>/dev/zero | egrep -q success ; then
-	if [[ x$dyn_debug =~ x[Oo][Nn] ]] ; then
-		echo $res | jq -c 
-	else
-		echo $res |
-		jq -e '{ function: "'${FUNCNAME[0]}'" , msgs: [.msgs[].INFO]  , data }'
-	fi
+
+res_info=$(echo $res | jq -e '{ args: '"$args"', msgs: [.msgs[].INFO] }')
+if echo $res | jq -e -r .status 2>/dev/zero | egrep -q success ; then	
+	[[ x$dyn_debug == xoff ]] || # prints res_info unless dyn_debug is set to off
+	echo $res_info | jq . 1>&2
+	[[ x$dyn_debug == xdebug ]] && echo $res | jq -c . 1>&2
 	return 0
-elif echo $res | fgrep -q '<html>' ; then
-	echo $res | lynx -dump --stdin 1>&2 || echo $res 1>&2
-	return 1
-elif echo $res | is_json ; then
-	if [[ x$dyn_debug =~ x[Oo][Nn] ]] ; then
-		echo $res | jq -c 1>&2
-	else
-		echo $res | jq -e -r '{ function: "'${FUNCNAME[0]}'" , msgs: [.msgs[].INFO] }' | egrep --color '.*' 1>&2
-		return 1
-	fi
 fi
+
+if echo $res | is_json ; then
+	echo $res_info | jq .
+	[[ x$dyn_debug == xdebug ]] && echo $res | jq -c .
+elif echo $res | fgrep -q '<html>' ; then
+	echo $res | lynx -dump --stdin 2>/dev/zero || echo $res 
+fi | egrep --color '.*' 1>&2
+return 1
 }
 
 function dyn_publish () {
@@ -83,20 +110,23 @@ if [[ $1 == zone ]] ; then
 	dyn_api -X PUT --data '{"publish":true,"zone":"'$domain'"}' $dyn_api/REST/Zone/$domain/ 
 elif [[ $1 == changes ]] ; then
 	dyn api -X PUT --data '{"publish":true}' $dyn_api/REST/Zone/$domain/
-fi | jq '{function: "'${FUNCNAME[0]}'" , msgs }'
+fi 
 }
 
-dyn_domain_ls ()
-{
+dyn_domain_ls () {
+# unless dyn_debug set to debug globally doesn't print anything
+[[ x$dyn_debug == xdebug ]] || local dyn_debug=off 
 if [[ -z $1 ]] ; then
-	dyn_api $dyn_api/REST/Zone/ | jq -r .data[] | cut -d/ -f4
+	dyn_api $dyn_api/REST/Zone/ 
+	echo $res | jq -r .data[] | cut -d/ -f4
 	return
 fi
 
 local domain=$1 id name type
 
 { echo -e "Id \t Name \t Type" ;
-dyn_api $dyn_api/REST/AllRecord/$domain/ | jq '{data}' |
+dyn_api $dyn_api/REST/AllRecord/$domain/ 
+echo $res | jq '{data}' |
 jq -r .data[] |
 cut -d / --output-delimiter=\  -f 3,5,6 |
 while read type name id ; do
@@ -149,12 +179,14 @@ fi
 domain=$1
 shift
 
-local domain_ls=$(dyn_ls_domain $domain) ids 
+
+local domain_ls=$(dyn_domain_ls $domain) ids 
+ids=$( echo "$domain_ls" |
 if [[ $1 == all ]] ; then
-	ids=$(dyn ls $domain | egrep -o '^[0-9]+')
+	egrep -o '^[0-9]+'
 else 
-	ids=$( echo "$domain_ls" | egrep "$1" | egrep -o '^[0-9]+')
-fi
+	egrep "$1" | egrep -o '^[0-9]+'
+fi)
 
 local id name type cache
 for id in $ids ; do
@@ -171,15 +203,18 @@ for id in $ids ; do
 		continue
 	fi
 
-	# start background subshell 
 	( 
+	# unless dyn_debug set to debug globally doesn't print anything
+	[[ x$dyn_debug == xdebug ]] || local dyn_debug=off 
+	dyn debug start background subshell 
 	unset dyn_token # Every background request should have its own token/session to avoid rate limit
-	dyn_api https://api.dynect.net/REST/${type}Record/${domain}/${name}/${id} > $cache || rm -f $cache
+	dyn_api https://api.dynect.net/REST/${type}Record/${domain}/${name}/${id} && echo $res > $cache
 	dyn token kill
+	dyn debug end subshell
 	)& 
-	# end subshell
-
-	sleep .02
+	while (( $(jobs -n | wc -l ) > 22 )) ; do 
+		sleep .1
+	done
 done | cat
 wait
 { echo -e "Id \t Name \t Type \t TTL \t Rdata \t Target/Value" ;
@@ -200,7 +235,7 @@ fi
 }
 
 function dyn_debug () {
-[[ x$dyn_debug =~ x[Oo][Nn] ]] && echo $*
+[[ x$dyn_debug == xdebug ]] && echo $* 1>&2
 }
 
 function dyn_tmpfile () {

@@ -182,9 +182,6 @@ case x$action in
 		incap_site_${action} "$@"
 		# incap site ip 12345 1.2.3.4 -> incap_site_ip 12345 1.2.3.4
 		;;
-	x)
-		incap_help
-		;;
 	*)
 		incap_${action} "$@"
 		# incap purge cache 12345 -> incap_purge cache 12345
