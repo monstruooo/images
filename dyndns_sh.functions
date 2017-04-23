@@ -74,48 +74,52 @@ args=$(echo $* | jq -R .)
 res=$( curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token "$@" 2>&1)
 exit_code=$?
 if [[ x$exit_code != x0 ]] ; then
+	(( exit_code = exit_code + 10 ))
 	msgs=$(echo $res | jq -R .)
-	res_info=$(jq -e '{ args: '"$args"', msgs: ['"$msgs"'] }')
-	echo Curl error mesg: $res 1>&2
-	echo Curl error code: $exit_code 1>&2
+	jq -n '{ function: "'$FUNCNAME[0]'" ,args: '$args', msgs: '$msgs' }' | egrep --color '.*' 1>&2
 	return $exit_code
 fi	
 # set +x ; echo 
 # login: There was a problem with your credentials
 
-res_info=$(echo $res | jq -e '{ args: '"$args"', msgs: [.msgs[].INFO] }')
-if echo $res | jq -e -r .status 2>/dev/zero | egrep -q success ; then	
-	[[ x$dyn_debug == xoff ]] || # prints res_info unless dyn_debug is set to off
-	echo $res_info | jq . 1>&2
-	[[ x$dyn_debug == xdebug ]] && echo $res | jq -c . 1>&2
-	return 0
+if ! echo $res | is_json ; then
+	if echo $res | fgrep -q '<html>' ; then
+		res=$(echo $res | lynx -dump --stdin 2>/dev/zero || echo $res )
+	fi
+	echo $res | egrep --color '.*' 1>&2
+	return 2
 fi
 
-if echo $res | is_json ; then
-	echo $res_info | jq .
-	[[ x$dyn_debug == xdebug ]] && echo $res | jq -c .
-elif echo $res | fgrep -q '<html>' ; then
-	echo $res | lynx -dump --stdin 2>/dev/zero || echo $res 
-fi | egrep --color '.*' 1>&2
-return 1
+local debug="
+$(echo $res | jq .)" # for debugging purposes
+
+if echo $res | jq -e -r .status 2>/dev/zero | egrep -q success ; then	
+	return 0
+else
+	echo $res | dyn_msg | jq -e ".args=$args" | egrep --color '.*' 1>&2
+	return 1
+fi
+
+}
+
+function dyn_msg () { # to print messages of success for functions like publish or record create
+	cat /dev/stdin | jq -e '{ function: "'${FUNCNAME[1]}'", msgs: [.msgs[].INFO] }'
 }
 
 function dyn_publish () {
 local info='
 	Checking for pending changes
 	dyn_api $dyn_api/REST/ZoneChanges/$domain | jq'
-[[ -n $2 ]] && local domain=$2 || return 1
+[[ -n $2 ]] && local domain=$2 || return 3
 if [[ $1 == zone ]] ; then
 	# to publish new zone
 	dyn_api -X PUT --data '{"publish":true,"zone":"'$domain'"}' $dyn_api/REST/Zone/$domain/ 
 elif [[ $1 == changes ]] ; then
 	dyn api -X PUT --data '{"publish":true}' $dyn_api/REST/Zone/$domain/
-fi 
+fi && echo $res | dyn_msg 1>&2
 }
 
 dyn_domain_ls () {
-# unless dyn_debug set to debug globally doesn't print anything
-[[ x$dyn_debug == xdebug ]] || local dyn_debug=off 
 if [[ -z $1 ]] ; then
 	dyn_api $dyn_api/REST/Zone/ 
 	echo $res | jq -r .data[] | cut -d/ -f4
@@ -204,8 +208,6 @@ for id in $ids ; do
 	fi
 
 	( 
-	# unless dyn_debug set to debug globally doesn't print anything
-	[[ x$dyn_debug == xdebug ]] || local dyn_debug=off 
 	dyn debug start background subshell 
 	unset dyn_token # Every background request should have its own token/session to avoid rate limit
 	dyn_api https://api.dynect.net/REST/${type}Record/${domain}/${name}/${id} && echo $res > $cache
