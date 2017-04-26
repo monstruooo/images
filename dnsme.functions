@@ -1,64 +1,22 @@
 #!/bin/bash
 
-function dnsme_js2table () {
-
-	{
-echo -e "Id \t Name \t Type \t TTL \t Value" ;
-/bin/cat /dev/stdin |
-jq -r '.data | sort_by(.type) | .[] |
-(.id | tostring) 
-	+ " \t " + 
-(if .name == "" then "@" else .name end) 
-	+ " \t " + 
-.type 
-	+ " \t " + 
-(.ttl | tostring) 
-	+ " \t " + 
-.value' ; 
-	} | 
-tabs2cols
-} # end function
-
-function dnsme_domain_rm () {
-local id
-args_to_vars "$@"
-dnsme_api V2.0/dns/managed/$id -X DELETE -d "[$id]"
-}
-
-function dnsme_record_rm () {
-local domain domain_id ids 
-args_to_vars "$@"
-read -r domain_id domain_id < <(dnsme_domain_id $domain) 
-[[ -n $domain_id ]] || return 1
-[[ -z $ids ]] && return 2
-ids=$(echo $ids) # second and every next record id to have exactly one leading space
-ids=${ids// /&ids=}
-dnsme_api V2.0/dns/managed/$domain_id/records?ids=$ids -X DELETE
-}
-
-function dnsme_domain_mk () {
-local domain json data
-args_to_vars "$@"
-data=$(args2json "$@")
-if [[  -n $domain ]] ; then
-	data=$( jq -n "$data | { name: .domain }")
-    dnsme_api V2.0/dns/managed/ -X POST -d "$data" | jq .
-else
-	return 1
+function dnsme_mk () {
+local domain domain_id serial id name type value ttl json data
+args2vars "$@"
+if [[ -z $type ]] ; then 
+	data=$( jq -n "{ name: \"$domain\" }")
+    dnsme_api V2.0/dns/managed/ -X POST -d "$data" 
+	return
 fi
-}
 
-function dnsme_record_mk () {
-local domain id name type value ttl json data
-args_to_vars "$@"
+dnsme domain id $domain > /dev/zero || return
+domain_id=$(echo $res | jq -r .id)
+domain=$(echo $res | jq -r .name)
+
 data=$(args2json "$@")
-
 data=$( echo "$data" | jq 'if .name=="@" then .name="" else . end')
 name=${name/@/}
 
-local domain_id
-read -r domain_id domain_id < <( dnsme_domain_id $domain) 
-[[ -n $domain_id ]] || return 1
 data=$( jq -n "$data | del(.domain)")
 
 if [[ -z $ttl ]] ; then
@@ -66,35 +24,58 @@ if [[ -z $ttl ]] ; then
 	data=$( jq -n "$data | .ttl=$ttl")
 fi
 
-local res record_count
-flow='If no id and not naked record'
+local records record_count
+flow='If no id provided and not naked record, check if record already exists and get its ip'
 if [[ -z $id && ! x$name == x ]] ; then
-	res=$(dnsme_get $domain |
-	jq '.data[] | select(.name=="'$name'")' |
-	jq -s '{ data: . }') # end res=$(
 
-	if ! record_count=$( jq -e -n -r "$res | .data | length" 2>/dev/zero) ; then
-		jqres code=1 src=${FUNCNAME[0]} msg="Something is wrong. Can not count records" 1>&2 
-		return 1
+	if ! records=$(dnsme ls $domain ) ; then
+		args2json src=${FUNCNAME[0]} msg="Something is wrong. Can't fetch existing domain records" | jq . | api_err
+		return 5
 	fi
 
+	records=$( echo "$records" | egrep "\s${name//./\\.}\s+${type}\s" )
+	record_count=$( echo "$records" | egrep '\S' | wc -l )
 	if (( record_count == 0 )) ; then
-		info="Do nothing. Record id is already unset"
+		info="Do nothing. Record id is not set anyway"
 	elif (( record_count == 1 )) ; then
-   		id=$( $jq -r -n "$res | .data[0].id")
+   		id=$(echo $records | egrep -o ^[0-9]+)
 	elif (( record_count > 1 )) ; then
-   		jqres code=1 src=${FUNCNAME[0]} msg="$record_count identical records \"$name\" with value $value"
+		local msg
+		msg=$(echo $record_count identical records \"$name\" of type $type | jq -R . )
+   		args2json src=${FUNCNAME[0]} msg="$msg" | jq -c . 1>&2
    		return 1
 	fi
 fi
 
 # Adding/updating records.
 if [[ -n $id ]] ; then
-    local old_value=$( dnsme_get $domain | $jq -r ".data[] | select(.id==$id) | .value" )
+    local old_data=$( dnsme ls $domain > /dev/zero ; echo $res | $jq --argjson id $id '.data[] | select(.id==$id)' )
     local data=$(jq -n "$data | .id=$id")
-    jqres src=${FUNCNAME[0]} msg="Updating record. No output expected on success" name=$name value=$value old_value=$old_value
-    dnsme_api V2.0/dns/managed/$domain_id/records/$id -X PUT -d "$data" | jq
+    res_info=$(args2json src=${FUNCNAME[0]} msg="Updating record. No output expected on success" name=$name new_data="$data" old_data="$old_data")
+    dnsme_api V2.0/dns/managed/$domain_id/records/$id -X PUT -d "$data"
 else
-    dnsme_api V2.0/dns/managed/$domain_id/records/ -X POST -d "$data" | jq
-fi
+    dnsme_api V2.0/dns/managed/$domain_id/records/ -X POST -d "$data"
+fi 
 } # function dnsme_mk
+
+function dnsme_rm () {
+local domain=$1 domain_id 
+shift
+read -r domain_id serial domain < <(dnsme_domain_id $domain)
+if [[ -z $1 ]] ; then
+	if [[ -z $domain ]] ; then
+		echo No such domain $domain 1>&2
+		return 1
+	fi
+	read -n 1 -p "Y/y to delete domain $domain: " ; read_nl
+	if [[ x$REPLY == x[Yy] ]] ; then
+		dnsme_api V2.0/dns/managed/$domain_id -X DELETE -d "[$domain_id]" &&
+		args2json msgs="Domain $domain deleted" 1>&2
+	fi
+else
+	ids=$(echo $*) # second and every next record id to have exactly one leading space
+	ids=${ids// /&ids=}
+	dnsme_api V2.0/dns/managed/$domain_id/records?ids=$ids -X DELETE &&
+	args2json msgs="Deleted records $*" | jq . 1>&2
+fi
+} # end function dnsme_rm

@@ -1,5 +1,112 @@
-#!/bin/bash 
+#!/bin/bash
 
+function dnsme_api () {
+
+local api_url=https://api.dnsmadeeasy.com
+[[ x$sandbox == x1 ]] && api_url=https://api.sandbox.dnsmadeeasy.com
+
+dnsme_throttle # Checking that the request rate is not exceeded
+
+request_date=$(
+{ echo -n "$(date -u -R) " ; date -u +%Z ; } | cut -s -d' ' -f1-5,7
+)
+
+hmac=$(echo -n "$request_date" | openssl sha1 -hmac "$dnsme_secret_key" | sed 's/.*= //g')
+
+# http headers
+api_key_H="x-dnsme-apiKey:$dnsme_api_key"
+hmac_H="x-dnsme-hmac:$hmac"
+req_date_H="x-dnsme-requestDate:$request_date"
+content_type_H="content-type:application/json"
+accept_type_H="accept:application/json"
+local api_uri=$1
+shift
+api_uri=${api_uri#*dnsmadeeasy.com/} # backward compatibility for calls that use full url instead of uri
+
+local src args msgs
+args=$(echo $api_uri $* | jq -R .)
+src=$(echo ${FUNCNAME[*]} | cut -d \  -f 1-10)
+if ! res=$(curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $api_url/$api_uri "$@" 2>&1 )
+then
+	exit_code=$(( $? + 10 ))
+	args2json res=$exit_code src="$src" args="$args" msgs="Curl failed: $res" | jq . | api_err
+	return $exit_code
+fi
+
+if [[ -z $res ]] ; then
+	res=$(args2json src="$src" msgs="Sucess. No curl output")
+	return 0
+fi
+
+# For some reason dnsme returns errors as jq filter instead of json	
+if jq -n -e "$(echo $res | cut -c 1-333) | .error"  >/dev/zero 2>&1 ; then
+local logic='
+	Reconstructing error can save you a lot of time troubleshooting'
+	args2json res=1 src="$src" args="$args" msgs="$res" | jq . | api_err
+	return 1
+fi
+
+if ! echo $res | is_json ; then 
+	args2json code=2 src="$src" args="$args" msgs="Request failed. Response is not json" | jq . | api_err
+local logic='
+	if response is not json. DNSME returns web pages on some errors'
+    { echo $res | grep -q '<html>' && echo $res | lynx -dump --stdin 1>&2 || echo $res ; } | api_err
+    return 2
+fi
+
+} # end function
+
+function dnsme_throttle () {
+local LIMIT=150 FRAME=5 # Request limit is 150 per 5 min
+
+# local reqs=$(ls $dnsme_work_dir/req_ts.* -1r)
+local reqs=$(find  $dnsme_work_dir -name req_ts* | sort -r)
+if (( $(echo "$reqs" | wc -l ) < 150 )) ; then
+	touch $dnsme_work_dir/req_ts.$(date +%s)
+	return 0
+fi
+
+local start=$(echo "$reqs" | sed -n 149p | egrep -o [0-9]+$)
+local frame_end=$(( start + FRAME*60 ))
+if (( frame_end > $(date +%s) )) ; then
+	local secs_wait=$(( frame_end - $(date +%s) ))
+	args2json src=${FUNCNAME[0]} msg="Rate limit exceeded. Waiting $secs_wait seconds" time="$(date)" | jq . 1>&2
+	sleep $secs_wait
+	echo "$reqs" | sed '1,149d' | xargs rm -f
+fi
+touch $dnsme_work_dir/req_ts.$(date +%s)
+}
+
+function dnsme_domain_status () {
+	local domain=$1 id
+	[[ -n $domain ]] || return 255
+	if [[ x$domain =~ ^x[0-9]+$ ]] ; then
+		dnsme api V2.0/dns/managed/$domain
+	else
+		dnsme api V2.0/dns/managed/id/$domain
+	fi || return
+	echo $res | json2bash
+} # end function
+	
+function dnsme_domain_id () {
+	res=$(cat $dnsme_cache | 
+	jq -e --arg domain $1 '.data[] | select(.name==$domain or (.id|tostring)==$domain)| {id,updated,name}')
+
+	if ! [[ x$? == x0 ]] ; then
+		args2json src=$FUNCNAME msgs="Domain $1 not found" | jq . | api_err
+		return 1
+	fi
+	echo $res | json2table
+}
+
+function dnsme_purge () {
+# purge deleted domains
+local domains cached_domains
+domains=$( dnsme ls | awk '{print $3}' | sed 1d )
+cached_domains=$( find $dnsme_domains_dir/* | egrep -v 'dnsme.domains')
+diff -Bb  <( echo "$domains")  <(echo "$cached_domains")  --suppress-common-lines  |
+egrep '^>' | awk '{print $2}' | xargs -L 1 /bin/rm -fv
+}
 
 function dnsme_cfg () {
 [[ x$1 == set ]] && unset dnsme_api_key dnsme_secret_key
@@ -8,198 +115,83 @@ function dnsme_cfg () {
 } # end function dnsme_configure
 
 function dnsme_url () {
-echo https://cp.dnsmadeeasy.com/dns/managed/$dnsme_id
+local domain_id=$1
+echo https://cp.dnsmadeeasy.com/dns/managed/$domain_id
 }
 
-function dnsme_umount () {
-local alias="cd pwd context ls cat mk rm updatedb purge set" cmd
-if [[ -n $dnsme_ps1_saved ]] ; then
-	PS1="$dnsme_ps1_saved"
-	unset dnsme_ps1_saved
-
-	if [[ x$dnsme_alias =~ xon|xON ]] ; then
-		for cmd in $alias ; do
-			unalias $cmd
-		done
-		eval "$dnsme_alias_saved"
-	fi
-
-	echo dnsme mount OFF
+function dnsme_updatedb () {
+if [[ -z $1 ]] ; then
+	dnsme_api V2.0/dns/managed && echo $res > $dnsme_cache
+	# Will return with error of dnsme_api, if dnsme_api fails
 fi
-} # end function dnsme_umount
 
-function dnsme_mount () {
-local alias="cd pwd context ls cat mk rm updatedb purge set" cmd
-if [[ -z $dnsme_ps1_saved ]] ; then
-	dnsme_ps1_saved="$PS1"
-	dnsme_alias_saved=$(alias)
-	PS1='$(dnsme pwd) ]$ '
-
-	if [[ x$dnsme_alias =~ xon|xON ]] ; then
-		for cmd in $alias ; do
-			alias $cmd="dnsme $cmd "
-		done
-	fi
-
-	echo dnsme mount ON
-fi
-} # end function dnsme_mount
-
-function dnsme_set() {
-/bin/cat <<EOF
-	dnsme_refresh   	= $dnsme_refresh
-	dnsme_debug         = $dnsme_debug
-	dnsme_alias         = $dnsme_alias
-	dnsme_name          = $dnsme_name
-	dnsme_id            = $dnsme_id
-EOF
-} # end function 
-
-function dnsme_cat () {
-case $(dnsme_context) in
-root)
-	if [[ -n $1 ]] ; then
-		for dmn in $* ; do
-			dnsme_get $dmn
-		done
-	else
-		dnsme_get |
-		jq -r '.data | sort_by("name") | { data: . }'
-	fi	
-;;
-domain)
-	if [[ -n $1 ]] ; then
-		dnsme_get $dnsme_name |
-		jq '.data[] | select(.id=='$1')'
-	else
-		dnsme_get $dnsme_name
-	fi
-;;
-esac
-} # end function
-
-function dnsme_context () {
-if [[ -n $dnsme_name ]] ; then
-	echo domain
-else
-	echo root
-fi
-} # end function
-
-function dnsme_ls_cache () {
-	grep -l 'type' $dnsme_domains_dir/*
+local name serial id
+read id serial name < <(dnsme domain id $1)
+[[ x$id =~ ^x[0-9]+$ ]] || return 1
+local domain_cache=$dnsme_domains_dir/$name
+dnsme_api V2.0/dns/managed/$id/records && echo $res > $domain_cache
 }
 
 function dnsme_ls () {
 
-case $(dnsme_context) in
-root)
-	if [[ -n $1 ]] ; then  
-	# dnsme:// dnsme ls <domain>
-		dnsme get $1 | dnsme_js2table
-	else  
-	# dnsme:// dnsme ls
-		dnsme_ls_domains
+if [[ -z $1 || x$1 == xdomains ]] ; then  
+	if ! cat $dnsme_cache | is_json ; then
+		dnsme updatedb
 	fi
-;;
-domain)
-	if [[ -n $1 ]] ; then   
-		# dnsme://<domain>:<domain id> dnsme ls <record id>
-		dnsme get $dnsme_name | jq -c '.data[]|select(.id|tostring=="'$1'")' |  json2bash
-	else
-		# dnsme://<domain>:<domain id> dnsme ls
-		dnsme get $dnsme_name | dnsme_js2table
-	fi
-;;
-esac
-} # end function 
+	res=$(<$dnsme_cache)
+	echo $res |
+	{ 
+	to_array "Domain Id" Serial "Domain name" ;
+	jq -r ' .data | sort_by("name") | .[] | 
+	{ id , updated, name }' ;
+	} | json2table
 
-function dnsme_mk () {
-local domain id name type value ec
-case $(dnsme_context) in
-root)
-	if [[ -n $1 ]] ; then 
-		domain=$1
-		dnsme_domain_mk domain=$domain
-	fi
-	ec=$?
-	;;
-domain)
-	domain=$dnsme_name
-	if (( ${#*} == 4 )) ; then
-		id=$1
-		shift
-	fi
-	name="$1"
-	shift
-	type=$1
-	shift
-	value="$*"
-	if [[ -n $id ]] ; then
-		dnsme_record_mk id=$id domain=$domain name="$name" type=$type value="$value"
-	else
-		dnsme_record_mk domain=$domain name="$name" type=$type value="$value"
-	fi
-	ec=$?
-	;;
-esac
-if [[ x$? == x0 && -n $dnsme_refresh ]] ; then
+	return
+fi
+
+if [[ x$1 == xcache ]] ; then
+	grep -l 'type' $dnsme_domains_dir/*
+	return
+fi
+
+local domain serial id
+domain=$1
+shift
+read id serial domain < <(dnsme domain id $domain)
+[[ x$id =~ ^x[0-9]+$ ]] || return 1
+local domain_cache=$dnsme_domains_dir/$domain
+if ! cat $domain_cache | is_json ; then
 	dnsme updatedb $domain
 fi
-} # end function dnsme_mk
-
-function dnsme_rm () {
-local name id
-if [[ -z $dnsme_name ]] ; then
-	read -r name id < <(dnsme_domain_id $1)
-	[[ -n $name ]] && echo Run manually dnsme_domain_rm id=$id || echo No such domain $1
+res=$(<$domain_cache)
+echo $res |
+if [[ -z $1 ]] ; then  
+	{
+	to_array Id Name Type TTL Rdata Value ;
+	# The next jq take input from the pipe
+	jq -r '.data | sort_by(.type) | .[] |
+	if .name == "" then .name="@" else . end |
+	{ id , name, type, ttl,
+	rdata: (
+	{weight,priority,port,mxLevel} | 
+	[ to_entries[] |
+	if .value|type=="number" then .key + "=" + (.value|tostring) else empty end ] | 
+	if length > 0 then join(",") else "-" end
+	),
+	value }' ; 
+	} | json2table
 else
-	if [[ -n $1 ]] ; then
-		dnsme_record_rm domain=$dnsme_name ids="$*"
-		if [[ x$? == x0 && -n $dnsme_refresh ]] ; then
-			dnsme updatedb $dnsme_name
-		fi
-	fi
+	jq -c '.data[]|select((.id|tostring)=="'$1'")' | json2bash
 fi
-
-} # end function dnsme_delete
-
-function dnsme_pwd () {
-echo -n dnsme://
-if [[ -n $dnsme_name ]] ; then
-	echo -n ${dnsme_name}:${dnsme_id}
-fi
-echo 
-} # end function dnsme_pwd
-
-function dnsme_cd () {
-if [[ -z $1 || x$1 == x/ ]] ; then 
-	unset dnsme_name dnsme_id
-else 
-	read -r dnsme_name dnsme_id < <(dnsme_domain_id $1)
-	[[ -n $dnsme_name ]] || { echo No such domain $1 1>&2 ; return 1; } 
-fi
-} # end function
-
-	
-function dnsme_updatedb () {
-local dmn=$1 dnsme_refresh=0 msg="Updating DNSME cache"
-
-	[[ -n $dnsme_name ]] && dmn=$dnsme_name
-	[[ -n $dmn ]] && msg="$msg & Domain $dmn cache"
-
-	echo $msg...
-	dnsme_get $dmn > /dev/zero
 } # end function 
 
 function dnsme () {
 
-dnsme_refresh=3
-dnsme_alias=off
-dnsme_debug=off
+# export dnsme_debug=off
 
 dnsme_work_dir=/dev/shm/$USER/dnsme
 dnsme_domains_dir=/dev/shm/$USER/dnsme/domains
+dnsme_cache=$dnsme_domains_dir/dnsme.domains
 dnsme_work_dir=$dnsme_work_dir/run
 mkdir -p $dnsme_work_dir $dnsme_domains_dir
 
@@ -214,9 +206,6 @@ case x$action in
 		dnsme_$action "$@" 
 		# dnsme ls cache -> dnsme_ls_cache
 		# dnsme domain rm 12345 -> dnsme_domain_rm 12345
-	;;
-	x)
-		dnsme_help 
 	;;
 	*)
 		dnsme_$action "$@" 
