@@ -24,17 +24,17 @@ shift
 api_uri=${api_uri#*dnsmadeeasy.com/} # backward compatibility for calls that use full url instead of uri
 
 local src args msgs
-args=$(echo $api_uri $* | jq -R .)
-src=$(echo ${FUNCNAME[*]} | cut -d \  -f 1-10)
+args=$(echo $api_uri $*)
+src=$(api_src)
 if ! res=$(curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $api_url/$api_uri "$@" 2>&1 )
 then
 	exit_code=$(( $? + 10 ))
-	args2json res=$exit_code src="$src" args="$args" msgs="Curl failed: $res" | jq . | api_err
+	echo -e " res code: $exit_code \n src: $src \n args: $args \n msgs: Curl failed: $res"  | api_err
 	return $exit_code
 fi
 
 if [[ -z $res ]] ; then
-	res=$(args2json src="$src" msgs="Sucess. No curl output")
+	res=$(echo -e " src: $src \n msgs: Sucess. No curl output" )
 	return 0
 fi
 
@@ -42,12 +42,12 @@ fi
 if jq -n -e "$(echo $res | cut -c 1-333) | .error"  >/dev/zero 2>&1 ; then
 local logic='
 	Reconstructing error can save you a lot of time troubleshooting'
-	args2json res=1 src="$src" args="$args" msgs="$res" | jq . | api_err
+	echo -e " res code: 1 \n src: $src \n args: $args \n msgs: $res" | api_err
 	return 1
 fi
 
 if ! echo $res | is_json ; then 
-	args2json code=2 src="$src" args="$args" msgs="Request failed. Response is not json" | jq . | api_err
+	echo -e "res code=2 \n src: $src \n args: $args \n msgs: Request failed. Response is not json" | api_err
 local logic='
 	if response is not json. DNSME returns web pages on some errors'
     { echo $res | grep -q '<html>' && echo $res | lynx -dump --stdin 1>&2 || echo $res ; } | api_err
@@ -59,20 +59,19 @@ fi
 function dnsme_throttle () {
 local LIMIT=150 FRAME=5 # Request limit is 150 per 5 min
 
-# local reqs=$(ls $dnsme_work_dir/req_ts.* -1r)
 local reqs=$(find  $dnsme_work_dir -name req_ts* | sort -r)
-if (( $(echo "$reqs" | wc -l ) < 150 )) ; then
+if (( $(echo $reqs | wc -w ) < 149 )) ; then
 	touch $dnsme_work_dir/req_ts.$(date +%s)
 	return 0
 fi
 
-local start=$(echo "$reqs" | sed -n 149p | egrep -o [0-9]+$)
+echo $reqs | cut -d \   -f 150- | xargs rm -f
+local start=$(echo $reqs | cut -d " " -f 149 | egrep -o [0-9]+$)
 local frame_end=$(( start + FRAME*60 ))
 if (( frame_end > $(date +%s) )) ; then
 	local secs_wait=$(( frame_end - $(date +%s) ))
-	args2json src=${FUNCNAME[0]} msg="Rate limit exceeded. Waiting $secs_wait seconds" time="$(date)" | jq . 1>&2
+	echo -e " src: $(api_src) \n msg: Rate limit exceeded. Waiting $secs_wait seconds \n time: $(date)" | api_err
 	sleep $secs_wait
-	echo "$reqs" | sed '1,149d' | xargs rm -f
 fi
 touch $dnsme_work_dir/req_ts.$(date +%s)
 }
@@ -93,7 +92,7 @@ function dnsme_domain_id () {
 	jq -e --arg domain $1 '.data[] | select(.name==$domain or (.id|tostring)==$domain)| {id,updated,name}')
 
 	if ! [[ x$? == x0 ]] ; then
-		args2json src=$FUNCNAME msgs="Domain $1 not found" | jq . | api_err
+		echo -e " src: $(api_src) \n msgs: Domain ${1:-Null} not found" | api_err
 		return 1
 	fi
 	echo $res | json2table
@@ -122,6 +121,7 @@ echo https://cp.dnsmadeeasy.com/dns/managed/$domain_id
 function dnsme_updatedb () {
 if [[ -z $1 ]] ; then
 	dnsme_api V2.0/dns/managed && echo $res > $dnsme_cache
+	return
 	# Will return with error of dnsme_api, if dnsme_api fails
 fi
 
@@ -132,14 +132,31 @@ local domain_cache=$dnsme_domains_dir/$name
 dnsme_api V2.0/dns/managed/$id/records && echo $res > $domain_cache
 }
 
-function dnsme_ls () {
-
-if [[ -z $1 || x$1 == xdomains ]] ; then  
+function dnsme_cat () {
+if [[ -z $1 ]] ; then  
 	if ! cat $dnsme_cache | is_json ; then
 		dnsme updatedb
 	fi
 	res=$(<$dnsme_cache)
-	echo $res |
+	cat $dnsme_cache
+	return
+fi
+
+local domain=$1 id serial
+read id serial domain < <(dnsme domain id $domain)
+[[ x$id =~ ^x[0-9]+$ ]] || return 1
+local domain_cache=$dnsme_domains_dir/$domain
+if ! cat $domain_cache | is_json ; then
+	dnsme updatedb $domain
+fi
+res=$(<$domain_cache)
+cat $domain_cache
+}
+
+function dnsme_ls () {
+
+if [[ -z $1 || x$1 == xdomains ]] ; then  
+	dnsme cat |
 	{ 
 	to_array "Domain Id" Serial "Domain name" ;
 	jq -r ' .data | sort_by("name") | .[] | 
@@ -154,17 +171,10 @@ if [[ x$1 == xcache ]] ; then
 	return
 fi
 
-local domain serial id
+local domain
 domain=$1
 shift
-read id serial domain < <(dnsme domain id $domain)
-[[ x$id =~ ^x[0-9]+$ ]] || return 1
-local domain_cache=$dnsme_domains_dir/$domain
-if ! cat $domain_cache | is_json ; then
-	dnsme updatedb $domain
-fi
-res=$(<$domain_cache)
-echo $res |
+dnsme cat $domain |
 if [[ -z $1 ]] ; then  
 	{
 	to_array Id Name Type TTL Rdata Value ;

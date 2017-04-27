@@ -2,6 +2,7 @@
 
 function dnsme_mk () {
 local domain domain_id serial id name type value ttl json data
+local api_src=$(api_src)
 args2vars "$@"
 if [[ -z $type ]] ; then 
 	data=$( jq -n "{ name: \"$domain\" }")
@@ -24,34 +25,29 @@ if [[ -z $ttl ]] ; then
 	data=$( jq -n "$data | .ttl=$ttl")
 fi
 
-local records record_count
+
 flow='If no id provided and not naked record, check if record already exists and get its ip'
 if [[ -z $id && ! x$name == x ]] ; then
 
-	if ! records=$(dnsme ls $domain ) ; then
-		args2json src=${FUNCNAME[0]} msg="Something is wrong. Can't fetch existing domain records" | jq . | api_err
-		return 5
-	fi
+	id=$( dnsme cat $domain | 
+			jq --arg name "$name" '.data[]|select(.name==$name)|.id' )
 
-	records=$( echo "$records" | egrep "\s${name//./\\.}\s+${type}\s" )
-	record_count=$( echo "$records" | egrep '\S' | wc -l )
-	if (( record_count == 0 )) ; then
-		info="Do nothing. Record id is not set anyway"
-	elif (( record_count == 1 )) ; then
-   		id=$(echo $records | egrep -o ^[0-9]+)
-	elif (( record_count > 1 )) ; then
-		local msg
-		msg=$(echo $record_count identical records \"$name\" of type $type | jq -R . )
-   		args2json src=${FUNCNAME[0]} msg="$msg" | jq -c . 1>&2
+	local count=$( echo $id | wc -w )
+	if (( count == 0 )) ; then
+		unset id
+	elif (( count == 1 )) ; then
+   		debug="Id is already set"
+	elif (( count > 1 )) ; then
+   		echo -e " src: $api_src \n msg: $record_count identical records $name of type $type " | api_err
    		return 1
 	fi
 fi
 
 # Adding/updating records.
 if [[ -n $id ]] ; then
-    local old_data=$( dnsme ls $domain > /dev/zero ; echo $res | $jq --argjson id $id '.data[] | select(.id==$id)' )
+    local old_data=$( dnsme cat $domain | $jq --argjson id $id '.data[] | select(.id==$id)' )
     local data=$(jq -n "$data | .id=$id")
-    res_info=$(args2json src=${FUNCNAME[0]} msg="Updating record. No output expected on success" name=$name new_data="$data" old_data="$old_data")
+    res_info=$(echo " src: $FUNCNAME \n msg: Updating record. No output expected on success \n new_data: $data \n old_data: $old_data ")
     dnsme_api V2.0/dns/managed/$domain_id/records/$id -X PUT -d "$data"
 else
     dnsme_api V2.0/dns/managed/$domain_id/records/ -X POST -d "$data"
@@ -64,18 +60,18 @@ shift
 read -r domain_id serial domain < <(dnsme_domain_id $domain)
 if [[ -z $1 ]] ; then
 	if [[ -z $domain ]] ; then
-		echo No such domain $domain 1>&2
+		echo " error: No such domain $domain" | api_err
 		return 1
 	fi
 	read -n 1 -p "Y/y to delete domain $domain: " ; read_nl
 	if [[ x$REPLY == x[Yy] ]] ; then
 		dnsme_api V2.0/dns/managed/$domain_id -X DELETE -d "[$domain_id]" &&
-		args2json msgs="Domain $domain deleted" 1>&2
+		echo -e " msgs: Domain $domain deleted" 1>&2
 	fi
 else
 	ids=$(echo $*) # second and every next record id to have exactly one leading space
 	ids=${ids// /&ids=}
 	dnsme_api V2.0/dns/managed/$domain_id/records?ids=$ids -X DELETE &&
-	args2json msgs="Deleted records $*" | jq . 1>&2
+	echo -e " msgs: Deleted records $*" 1>&2
 fi
 } # end function dnsme_rm
