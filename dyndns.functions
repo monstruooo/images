@@ -1,6 +1,6 @@
 #!/bin/bash
 
-function dyn_domain_add () {
+function dyn_domain_mk () {
 [[ -n $3 ]] && local domain=$1 rname=$2 ttl=$3 || return 1
 local data=$( jq -c --arg rname $rname --arg ttl $ttl -n '{$rname, ttl: $ttl|tonumber }' )
 dyn_debug '
@@ -31,7 +31,7 @@ done
 dyn publish changes $domain
 }
 
-function dyn_record_add () {
+function dyn_record_mk () {
 local domain=$1
 shift
 
