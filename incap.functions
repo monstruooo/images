@@ -13,23 +13,24 @@ incap_site_add () {
 	local account_id=$1 domain=$2 site_ip=$3 site_id api_args res
 	
 	api_args="site_ip=$site_ip&domain=${domain}&account_id=${account_id}&send_site_setup_emails=false&force_ssl=true"
-	echo Creating site $domain
-	if res=$(incap_api "$api_args" https://my.incapsula.com/api/prov/v1/sites/add)
+	echo Creating site $domain 1>$2
+	if incap_api "$api_args" https://my.incapsula.com/api/prov/v1/sites/add
 	then
-	    site_id=$( incap_site_id $domain)
-		echo -n "Setting ignore_ssl to read the incapdns record: "
-		res=$(incap_api "site_id=${site_id}&param=ignore_ssl&value=true" api/prov/v1/sites/configure)
-		echo $res | $jq .res_message
+	    site_id=$( incap site id $domain) || return
+		incap_res_msg
+		echo "Setting ignore_ssl to read the incapdns record: "
+		incap_api "site_id=${site_id}&param=ignore_ssl&value=true" api/prov/v1/sites/configure && incap_res_msg
 	else
-	    echo Failed to create site
 	    return 1
-	fi
+	fi 1>&2
 }
 
 incap_site_rm () {
 [[ -z $1 ]] && return 1
-incap api "site_id=$1" api/prov/v1/sites/delete | jq .
-incap ls cache sites | egrep ".*_${1}$" | xargs -L 1 rm -v
+if incap api "site_id=$1" api/prov/v1/sites/delete ; then
+	incap_res_msg 1>&2
+	incap ls cache sites | egrep ".*_${1}$" | xargs -L 1 rm -v
+fi
 }
 
 function incap_site_purge () {
@@ -40,23 +41,22 @@ local usage='
 case $1 in
 	cache)
 		echo Purging site $2 cache...
-		incap_api site_id=$2 api/prov/v1/sites/cache/purge | jq .
+		incap_api site_id=$2 api/prov/v1/sites/cache/purge && incap_res_msg
 	;;
 	hostname)
 		echo Purging $3 from hostname cache...
-		incap_api host_name=$2 api/prov/v1/sites/hostname/purge | jq .
+		incap_api host_name=$2 api/prov/v1/sites/hostname/purge && incap_res_msg
 	;;
 	*)
-		echo Usage: "$usage" 1>&2
+		echo Usage: "$usage"
 	;;
-esac
+esac 1>&2
 }
 
 function incap_site_ssl () {
 local id=$1
-[[ x$1 =~ ^x[0-9]+$ ]] || return 1
-incap_api "site_id=${id}&param=domain_validation&value=dns" api/prov/v1/sites/configure |
-jq -r .debug_info.domain_dns
+[[ -z $id ]] || return 1
+incap_api "site_id=${id}&param=domain_validation&value=dns" api/prov/v1/sites/configure 
 }
 
 
@@ -73,6 +73,7 @@ fi
 	
 local old_ips res
 old_ips=$(incap_site_status $id | jq '.ips')
-res=$( incap_api "site_id=$id&param=site_ip&value=$ip" api/prov/v1/sites/configure ) || return 
-echo $res | jq '.|={site_id , domain , new_ips: .ips} | .old_ips='"$old_ips"
+incap_api "site_id=$id&param=site_ip&value=$ip" api/prov/v1/sites/configure || return 
+echo $res | 
+	jq --arg old_ips "$old_ips" 'site_id , domain , new_ips: .ips, old_ips: $old_ips}'
 } # end function

@@ -1,26 +1,211 @@
 #!/bin/bash
 
+function incap_res_msg () {
+	echo $res | jq .res_message
+}
+
+function incap_site_id () {
+[[ -z $1 ]] && return 1
+local site_id domain=$1
+mapfile site_id < <(incap cat $domain | jq .site_id )
+
+case ${#site_id[@]} in
+	1)
+        echo $site_id
+		;;
+	0)
+		echo -e " res_code: 1 \n src: $(api_history) \n args: $@ \n msg: Site $domain not found" | error_red
+        return 1
+		;;
+	*)
+		echo -e " res_code: 2 \n src: $(api_history) \n args: $@ \n msg: Duplicate sites" | error_red
+		return 2
+		;;
+esac
+} # end function 
+
+function incap_api () {
+local data="$1" api_uri="$2" api_url=https://my.incapsula.com
+api_uri=${api_uri/$api_url\//}  # in case the string contains the whole url path
+local api_history=$(api_history)
+res=$( curl -k -S -s --data "api_id=${incap_api_id}&api_key=${incap_api_key}&${data}" $api_url/$api_uri ) ||
+return 
+
+res_code=$?
+if ! [[ x$res_code == x0 ]] ; then
+	(( res_code = res_code + 10 ))
+	echo -e " res_code: $res_code \n src: $api_history \n msgs: curl error: $res" | error_red
+	return $res_code
+fi
+
+if ! echo $res | is_json ; then
+	res_code=2
+	echo -e " res_code: $res_code \n src: $api_history \n msgs: Request failed. Response is not json" | error_red
+	echo $res |
+	if echo $res | fgrep -q '</html>' ; then
+		lynx -dump -stdin
+	else
+		cat 
+	fi | 
+	egrep '\S+' | error_red
+	return $res_code
+fi
+
+local res_code=$(jq -e .res <<< $res)
+if ! [[ x$res_code == x0 ]] ; then
+	echo -e " res_code: $res_code \n src: $api_history \n msgs: $res" | error_red
+	return $res_code
+fi
+
+echo $res | 
+jq -e  'if has("site_id") and has("domain") and has("site_creation_date") then . else empty end' >/dev/zero && echo $res | incap_site2disk
+return 0
+
+}
+
+function incap_site2disk () {
+local domain site_id json
+mkdir -p $incap_sites_dir
+cat /dev/stdin |
+jq -c -j '.domain , " " , .site_id , " " , . , "\n"' |
+while read -r domain site_id json ; do
+	echo $json >  $incap_sites_dir/${domain}_${site_id}
+done
+} # end function
+
+function incap_updatedb () {
+
+if [[ -n $1 ]] ; then
+	local id
+	for id in $@ ; do
+		incap site status $id | incap site summary
+	done
+	return
+fi
+
+local account_id 
+local account accounts accounts2 request requests p
+
+accounts=$(incap ls accounts |	egrep -o '^[0-9]+')
+rm -f $incap_accounts_dir/account_page-[0-9]*
+accounts=" "$(echo $accounts)" " # echo and spaces to allow removing finished accounts as / $account / /
+accounts2=$accounts
+
+local page= limit=3 page_size=100 exit_code=0
+export page 
+
+while true ; do 
+	local count=$(echo $accounts| wc -w)
+	if (( count == 0 )) ; then
+		break
+	elif (( count >= limit )) ; then
+		hop_pages=1
+	elif (( count < limit )) ; then
+		hop_pages=$((limit/count))
+		echo $((limit%count)) | egrep -q ^0 || ((hop_pages++))
+	fi
+
+	local requests=
+	for ((i=1;i<=hop_pages;i++)) ; do
+		[[ -z $page ]] && page=0 || ((page++))
+		for account in $accounts ; do
+			requests="$requests $account:$page"
+		done
+	done
+
+	echo Accounts: $accounts | egrep --color '.*'
+
+	echo $requests
+	for request in $requests ; do
+
+		# The problem is unset doesn't affect the current loop thru the array
+		# This break was relevant before the last changes. Leaving it in case I go to the old method
+		# (( ${#accounts[@]} == 0 )) && break
+		echo $accounts| wc -w | egrep -q ^0 && break
+            account=${request%:*} p=${request#*:};
+            printf 'Account: %-6s Page: %-3s\n' $account $p | egrep --color '.*';
+            file=$incap_accounts_dir/account_page-${account}_${p};
+            { incap_api "account_id=${account}&page_size=${page_size}&page_num=$p" api/prov/v1/sites/list ; echo $res > $file ; } & 
+			while true; do
+                local jobs;
+                jobs=$(jobs -l | grep -o 'incap_api.*' | wc -l) || continue;
+                (( jobs < limit )) && break;
+                sleep .2;
+            done;
+        done;
+        local logic='You need to wait for jq to finish before you can count sites';
+        wait;
+        for account in $accounts;
+        do
+            debug="Page = $page";
+            file=$incap_accounts_dir/account_page-${account}_${page};
+            res=$( jq -r .res $file);
+            if (( res != 0 )); then
+                exit_code=$res;
+            fi;
+            count=$( grep -o site_id $file | wc -l );
+            if (( count < page_size )); then
+                echo account $account finished. The last page count is $count in $file;
+                accounts=${accounts/ ${account} / };
+            fi;
+            if (( count == 0 )); then
+                rm -fv $file;
+            fi;
+        done;
+    done;
+    for account in $accounts2;
+    do
+        echo;
+        echo $account;
+        for file in $incap_accounts_dir/account_page-${account}_[0-9];
+        do
+            printf '%-11s%-5s%-3s%-3s\n' $( cat $file |
+                jq -r \"${file#*conf_}'" + .page + " " +(.sites|length|tostring) + " " + (.res|tostring) + " " + .res_message');
+        done;
+    done;
+    echo;
+    echo Duplicate sites:;
+    jq -r .sites[].domain $incap_accounts_dir/account_page-[0-9]* | sort -V | uniq -d | egrep --color '.*' || echo No duplicate sites detected;
+    if [[ x$exit_code != x0 ]]; then
+        echo -e "\nAt least one page failed with error\n" | egrep --color '.*';
+        return $exit_code;
+    else
+        echo -e "\nSuccessfully finished downloading all Incapsula site reports\n";
+    fi
+
+	rm -f $incap_sites_dir/*
+	jq -n '{ message: "Exploding Incapsula configuration. Can take some seconds" , source: "Oskar" }' 1>&2
+	files=$(incap ls cache accounts)
+	[[ -z $files ]] && { echo No files found. Run incap updatedb ; return 1 ; }
+	for file in $files ; do
+		jq .sites[] $file | incap_site2disk &
+	done 
+	wait
+
+
+}
+
+incap_site_status ()
+{
+    local incapsula_site_id=$1;
+    incap_api "site_id=${incapsula_site_id}" api/prov/v1/sites/status 2>/dev/zero &&
+	echo $res | jq .
+}
+
+
 function incap_cfg () {
 [[ -z $incap_api_id ]] && read -s "API Key: " incap_api_id
 [[ -z $incap_api_key ]] && read -s "API Key: " incap_api_id
 }
 
-function incap_js () {
+function incap_cat () {
 
 if [[ x$1 == xaccounts ]] ; then
-	shift
-	if [[ -n $1 ]] ; then
-		incap_js_sites $1
-	else
-		incap_js_accounts
-	fi
+	incap_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list
 elif [[ x$1 == xsites ]] ; then
-	shift
-	if [[ -n $1 ]] ; then
-		incap_js_sites $1 
-	else
-		incap_js_sites
-	fi
+	find $incap_sites_dir -regex '.+_[0-9]+$' -exec cat {} \;
+elif [[ -n $1 ]] ; then
+	incap ls cache sites | egrep -e "/${1}_[0-9]+$" -e "/[^/]+_${1}$" | xargs cat
 fi
 
 }
@@ -36,22 +221,22 @@ elif [[ x$1 == xaccounts ]] ; then
 elif [[ x$1 == xsites ]] ; then
 	shift
 	if [[ -n $1 ]] ; then
-		incap_js_sites $1 | incap_site_summary
+		incap cat $1 | incap_site_summary
 	else
-		incap_js_sites | incap_js2table
+		incap cat sites | incap_table_tabs
 	fi
 	return
 elif [[ x$1 == xorigins ]] ; then
 	shift
 	if [[ -n $1 ]] ; then
-		{ echo -e "Site Id \t Site Name \t Account Id \t IPs" ;
-		incap_js_sites | 
-			jq -j -r 'select(.ips|inside(["'"$1"'"])) |
-			.site_id, " \t " , .domain , " \t " , .account_id , " \t " , (.ips|join(",")) , "\n"' ;
-		} | tabs2cols
+		{ echo -e '[ "Site Id", "Site Name", "Account Id", "IPs" ]' ;
+		incap cat sites | 
+			jq -r 'select(.ips|inside(["'"$1"'"])) |
+			[ .site_id, .domain, .account_id, (.ips|join(",")) ]' ;
+		} | json2table
 	else
 		{ echo -e "Origin \t Number of Sites" ;
-		incap_js_sites | jq -r '.ips[]' | sort | uniq -c | sort -r -n -k 1 | awk '{print $2 " \t " $1}' ; } |
+		incap cat sites | jq -r '.ips[]' | sort | uniq -c | sort -r -n -k 1 | awk '{print $2 " \t " $1}' ; } |
 		tabs2cols
 	fi
 	return
@@ -69,100 +254,111 @@ elif [[ x$1 == xcache ]] ; then
 fi
 }
 
+function incap_ls_accounts () {
+	if [[ -z $1 ]] ; then
+		{ echo '[ "Account ID", "Account Name" ]' ;
+		incap cat accounts &&
+		echo $res |
+			jq -r '.accounts | sort_by(.account_name) | .[] |
+			[ .account_id, .account_name ]' ;
+		} | json2table
+	else
+		incap cat sites |
+			jq -r 'select((.account_id | tostring)=="'"$*"'")' |
+			incap_table
+	fi
+}
+
 incap_site_summary () {
 cat /dev/stdin |
 jq -r '
-"Site ID"
-	+ "\t = " +
-		(.site_id?|tostring),
-
-"Site Name"
-	+ "\t = " +
-		.domain?,
-
-"Site Status"
-	+ "\t = " +
-		.status,
-
-"Account ID"
-	+ "\t = " +
-		(.account_id|tostring),
-
-"Origin"
-	+ "\t = " +
-		(.ips|join(",")), 
-
-"Cache Mode"
-	+ "\t = " +
-		.performance_configuration.acceleration_level?,
-
-"Block URLs"
-	+ "\t = " +
-		(.security.acls.rules[]|select(.id=="api.acl.blacklisted_urls")|[ .urls[].value ] | join(",") ),
-
-"SSL CA"
-	+ "\t = " +
-		.ssl.generated_certificate.ca,
-
-"SSL San"
-	+ "\t = " +
-		(.ssl.generated_certificate.san | join(",")),
-
-"SSL Detection"
-	+ "\t = " +
-		(.ssl.origin_server.detected | tostring),
-
-"SSL Detection Status"
-	+ "\t = " +
-		.ssl.origin_server.detectionStatus,
-
-"SSL Validation Status"
-	+ "\t = " +
-		.ssl.generated_certificate.validation_status,
-
-"DNS CNAME Record"
-	+ "\t = " +
-		({ dns: [(.dns[] | select(.set_type_to=="CNAME"))? ]} |
-		if .[] | length == 1 then .dns[0].set_data_to | join(",") else "N/A" end ),
-
-"DNS A Records"
-	+ "\t = " +
-		({ dns: [(.dns[] | select(.set_type_to=="A"))? ]} |
-		if .[] | length == 1 then .dns[0].set_data_to | join(",") else "N/A" end )
-	' | 
-	tabs2cols
+[
+	[ "Site ID",		"= " + (.site_id?|tostring) ],
+	[ "Site Name",		"= " + .domain? ],
+	[ "Site Status",	"= " + .status ],
+	[ "Account ID",		"= " + (.account_id|tostring) ],
+	[ "Origin", 		"= " + (.ips|join(",")) ], 
+	[ "Cache Mode",		"= " + .performance_configuration.acceleration_level? ],
+	[ "Block URLs",		"= " + 
+			(
+				[ (	.security.acls.rules[] |
+					select(.id=="api.acl.blacklisted_urls") |
+					.urls[].value ) 
+				] | join(",")
+			) 
+	],
+	[ "SSL CA",					"= " + .ssl.generated_certificate.ca ],
+	[ "SSL San",				"= " + (.ssl.generated_certificate.san | join(",")) ],
+	[ "SSL Detection",			"= " + (.ssl.origin_server.detected | tostring) ],
+	[ "SSL Detection Status",	"= " + .ssl.origin_server.detectionStatus ],
+	[ "SSL Validation Status",	"= " + .ssl.generated_certificate.validation_status ],
+	[ "DNS CNAME Record",		"= " +
+		(
+			{ dns:	[ ( .dns[] |
+						select(.set_type_to=="CNAME") ) 
+					] 
+			} |
+			if .[] | length == 1 then 
+				.dns[0].set_data_to | join(",")
+			else 
+				"" 
+			end 
+		) 
+	],
+	[ "DNS A Records",			"= " +
+		( { dns: [(.dns[] | select(.set_type_to=="A"))? ] } |
+		if .[] | length == 1 then 
+			.dns[0].set_data_to | join(",")
+		else 
+			""
+		end ) 
+	]
+] ' | jq .[] | json2table
 }
 
-function incap_js2table () {
-local flow='
-	{ 
-	echo ... ;
-	cat stdin ... |
-	jq ...
-	jq continues ; 
-	} | {
-	while read ... 
-	}
-	{} groups output of commands for pipe input/output'
+function incap_table_tabs () {
+{ echo -e "Site Id \t Site Name \t Account \t IPs \t CNAME" ;
 
-	{ 
-echo -e "Site Id\tSite Name\tAccount\tIPs\tCNAME" ;
+/bin/cat /dev/stdin |
+jq -j '
+.site_id,	
+	" \t ",
+.domain,	
+	" \t ",
+.account_id,
+	" \t ",
+(.ips|join(",") | .[0:44] ),
+	" \t ",
+( 
+	{ dns: [ (.dns[]|select(.set_type_to=="CNAME"))? ] } |
+	if .[]|length==1 then 
+		.dns[0].set_data_to|join(",")
+	else 
+		"N/A"
+	end 
+),	"\n"' ; } | tabs2cols
+}
+
+function incap_table () {
+{ echo '[ "Site Id", "Site Name", "Account", "IPs", "CNAME" ]' ;
 
 /bin/cat /dev/stdin |
 jq -r '
-(.site_id|tostring) 
-	+ "\t" +
-.domain 
-	+ "\t" +
-(.account_id|tostring) 
-	+ "\t" +
-(.ips|join(",") | .[0:44] )
-	+ "\t" +
-({ dns: [(.dns[]|select(.set_type_to=="CNAME"))? ]} | if .[]|length==1 then .dns[0].set_data_to|join(",") else "N/A" end )' ; # end jq -r
-	} | 
-	tabs2cols
+[ 
+	.site_id,
+	.domain ,
+	.account_id,
+	(.ips|join(",") | .[0:44] ),
+	( 
+		{ dns: [ (.dns[]|select(.set_type_to=="CNAME"))? ] } |
+		if .[]|length==1 then 
+			.dns[0].set_data_to|join(",")
+		else 
+			"N/A"
+		end 
+	) 
+]' ; } | json2table
 }
-
 
 function incap () {
 
@@ -189,5 +385,4 @@ case x$action in
 esac
 		
 } # end function incap
-
 
