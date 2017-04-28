@@ -57,8 +57,9 @@ dyn_token=$( echo $res | jq -e -r .data.token ) && export dyn_token dyn_token_ts
 function dyn_token_kill () {
 # destroy token
 [[ -n $dyn_token ]] || return
-curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token -X DELETE $dyn_api/REST/Session |
-jq -e -r .status 2>/dev/zero | egrep -q success && unset dyn_token 	
+local res
+curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token -X DELETE $dyn_api/REST/Session >/dev/zero
+unset dyn_token 	
 }
 
 function dyn_token_revive () {
@@ -120,9 +121,11 @@ fi && echo $res | dyn_msg 1>&2
 }
 
 dyn_domain_ls () {
+local dyn_token
 if [[ -z $1 ]] ; then
 	dyn_api $dyn_api/REST/Zone/ 
 	echo $res | jq -r .data[] | cut -d/ -f4
+	dyn_token_kill
 	return
 fi
 
@@ -130,6 +133,7 @@ local domain=$1 id name type
 
 { echo -e "Id \t Name \t Type" ;
 dyn_api $dyn_api/REST/AllRecord/$domain/ 
+dyn token kill
 echo $res | jq '{data}' |
 jq -r .data[] |
 cut -d / --output-delimiter=\  -f 3,5,6 |
