@@ -9,6 +9,22 @@ readme='add new line to read -n 1 unless Enter pressed (which adds new line)'
 [[ -z $REPLY ]] || echo
 }
 
+function info_green () {
+local GREP_COLOR
+export GREP_COLOR="01;32"
+cat /dev/stdin | egrep --color '.*'
+}
+
+function api_history () {
+	echo ${FUNCNAME[*]} | cut -d \  -f 2-11
+}
+
+function error_red () {
+local GREP_COLOR
+export GREP_COLOR="01;31"
+cat /dev/stdin | egrep --color '.*' 1>&2
+}
+
 function prn_col () {
         local next
         for next in $* ; do
@@ -106,27 +122,31 @@ local json=$(args2json "$@")
 jq -n "$json | { res: . }"
 }
 
-function args_to_vars () {
-local arg k j 
+function args2vars () {
+local arg key
 for arg in "$@" ; do
-	k=${arg%%=*}
-	#keys="$k $keys"
-	for k in $k ; do
-		export $k="${arg#*=}"
-	done
+	[[ "$arg" =~ = ]] || continue
+	key=${arg%%=*}
+	arg="${arg#*=}"
+	export $key="$arg"
 done
 
 } # end function
 
-function to_jsonarray () {
-local a
+function json2table () {
 cat /dev/stdin |
-xargs  printf '%s\n'  | 
-while read -r a ; do 
-	echo "$a" |
-	jq . 2>/dev/zero || echo "$a" | jq -R .
+jq -j '[ to_entries| .[].value|tostring ] |
+	join (" \t "), "\n"' |
+tabs2cols
+}
+
+function to_array () {
+local arg
+for arg in "$@" ; do
+	echo "$arg" |
+	jq . 2>/dev/zero || echo "$arg" | jq -R .
 done | 
-jq -s -c
+jq -s -c .
 }
 
 function args2json () {
@@ -139,6 +159,7 @@ local usage='
 local key value arg json
 json='{}'
 for arg in "$@" ; do
+	[[ "$arg" =~ = ]] || continue
 	key=${arg%%=*}
 	value="${arg#*=}"
 
@@ -150,17 +171,3 @@ for arg in "$@" ; do
 done  
 echo $json | jq -c .
 } # end function
-
-function json_dump_py () {
-local py_cmd='import sys,json;
-print (json.load(sys.stdin) , indent 3)'
-
-if [[ -n "$*" ]] ; then
-    echo "$*" | python -c "$py_cmd"
-else
-    while read line ; do
-        echo $line
-    done | python -c "$py_cmd"
-fi
-} # end function
-
