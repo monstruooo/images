@@ -2,7 +2,7 @@
 
 function dnsme_mk () {
 local domain domain_id serial id name type value ttl json data
-local api_src=$(api_src)
+local api_history=$(api_history)
 args2vars "$@"
 if [[ -z $type ]] ; then 
 	data=$( jq -n "{ name: \"$domain\" }")
@@ -38,7 +38,7 @@ if [[ -z $id && ! x$name == x ]] ; then
 	elif (( count == 1 )) ; then
    		debug="Id is already set"
 	elif (( count > 1 )) ; then
-   		echo -e " src: $api_src \n msg: $record_count identical records $name of type $type " | api_err
+   		echo -e " src: $api_history \n msg: $record_count identical records $name of type $type " | error_green
    		return 1
 	fi
 fi
@@ -60,7 +60,7 @@ shift
 read -r domain_id serial domain < <(dnsme_domain_id $domain)
 if [[ -z $1 ]] ; then
 	if [[ -z $domain ]] ; then
-		echo " error: No such domain $domain" | api_err
+		echo " error: No such domain $domain" | error_green
 		return 1
 	fi
 	read -n 1 -p "Y/y to delete domain $domain: " ; read_nl

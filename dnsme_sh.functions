@@ -25,11 +25,11 @@ api_uri=${api_uri#*dnsmadeeasy.com/} # backward compatibility for calls that use
 
 local src args msgs
 args=$(echo $api_uri $*)
-src=$(api_src)
+src=$(api_history)
 if ! res=$(curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $api_url/$api_uri "$@" 2>&1 )
 then
 	exit_code=$(( $? + 10 ))
-	echo -e " res code: $exit_code \n src: $src \n args: $args \n msgs: Curl failed: $res"  | api_err
+	echo -e " res code: $exit_code \n src: $src \n args: $args \n msgs: Curl failed: $res"  | error_red
 	return $exit_code
 fi
 
@@ -42,16 +42,20 @@ fi
 if jq -n -e "$(echo $res | cut -c 1-333) | .error"  >/dev/zero 2>&1 ; then
 local logic='
 	Reconstructing error can save you a lot of time troubleshooting'
-	echo -e " res code: 1 \n src: $src \n args: $args \n msgs: $res" | api_err
+	echo -e " res code: 1 \n src: $src \n args: $args \n msgs: $res" | error_red
 	return 1
 fi
 
-if ! echo $res | is_json ; then 
-	echo -e "res code=2 \n src: $src \n args: $args \n msgs: Request failed. Response is not json" | api_err
-local logic='
-	if response is not json. DNSME returns web pages on some errors'
-    { echo $res | grep -q '<html>' && echo $res | lynx -dump --stdin 1>&2 || echo $res ; } | api_err
-    return 2
+if ! echo $res | is_json ; then
+	res_code=2
+	echo -e "res_code: $res_code \n src: $src \n args: $args \n msgs: Request failed. Response is not json" | error_red
+    echo $res | 
+	if echo $res | fgrep -q '</html>' ; then
+		 lynx -dump --stdin 1>&2
+	else
+		cat
+	fi | error_red
+    return $res_code
 fi
 
 } # end function
@@ -70,7 +74,7 @@ local start=$(echo $reqs | cut -d " " -f 149 | egrep -o [0-9]+$)
 local frame_end=$(( start + FRAME*60 ))
 if (( frame_end > $(date +%s) )) ; then
 	local secs_wait=$(( frame_end - $(date +%s) ))
-	echo -e " src: $(api_src) \n msg: Rate limit exceeded. Waiting $secs_wait seconds \n time: $(date)" | api_err
+	echo -e " src: $(api_history) \n msg: Rate limit exceeded. Waiting $secs_wait seconds \n time: $(date)" | error_green
 	sleep $secs_wait
 fi
 touch $dnsme_work_dir/req_ts.$(date +%s)
@@ -92,7 +96,7 @@ function dnsme_domain_id () {
 	jq -e --arg domain $1 '.data[] | select(.name==$domain or (.id|tostring)==$domain)| {id,updated,name}')
 
 	if ! [[ x$? == x0 ]] ; then
-		echo -e " src: $(api_src) \n msgs: Domain ${1:-Null} not found" | api_err
+		echo -e " src: $(api_history) \n msgs: Domain ${1:-Null} not found" | error_green
 		return 1
 	fi
 	echo $res | json2table
