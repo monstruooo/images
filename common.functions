@@ -1,6 +1,6 @@
 #!/bin/bash
 
-function tabs2cols() {
+function tabs2table() {
 cat /dev/stdin | column -x -t -s $'\t'
 }
 
@@ -48,7 +48,7 @@ jq  -r -c --stream '
 	+ "\t = "
 	+ (.[1]|tostring)
 	' /dev/stdin | # jq end - pipe continues
-	tabs2cols
+	tabs2table
 }
 
 function json2fs () {
@@ -137,7 +137,7 @@ function json2table () {
 cat /dev/stdin |
 jq -j '[ to_entries| .[].value|tostring ] |
 	join (" \t "), "\n"' |
-tabs2cols
+tabs2table
 }
 
 function to_array () {
