@@ -143,7 +143,7 @@ while read type name id ; do
 	[[ $name =~ ^$domain$ ]] && name=@
 	[[ $name =~ .+$domain$ ]] && name=${name%.$domain}
 	echo -e "$id \t $name \t $type"
-done ; } | tabs2cols 
+done ; } | tabs2table 
 }
 
 function dyn_record2table () {
@@ -227,7 +227,7 @@ wait
 for id in $ids ; do
 	cache=$dyn_domains_dir/${domain}.$id
 	jq -e . $cache || return
-done | dyn_record2table ; } | tabs2cols
+done | dyn_record2table ; } | tabs2table
 }
 
 function dyn_ls () {
