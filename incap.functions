@@ -8,24 +8,40 @@ incap_site_status 101578098  | jq '.security.acls.rules[] | { (.id): .|del(.id) 
 
 }
 
-incap_site_add () {
+incap_site_mk () {
 
-	local account_id=$1 domain=$2 site_ip=$3 site_id api_args res
+if [[ x$1 == xhelp ]] ; then
+local help='
+<function> <account id> <site name> <origin ip>
+'
+echo "$help"
+return
+fi
+
+local account_id=$1 domain=$2 site_ip=$3 site_id api_args
 	
-	api_args="site_ip=$site_ip&domain=${domain}&account_id=${account_id}&send_site_setup_emails=false&force_ssl=true"
-	echo Creating site $domain 1>$2
-	if incap_api "$api_args" https://my.incapsula.com/api/prov/v1/sites/add
-	then
-	    site_id=$( incap site id $domain) || return
-		incap_res_msg
-		echo "Setting ignore_ssl to read the incapdns record: "
-		incap_api "site_id=${site_id}&param=ignore_ssl&value=true" api/prov/v1/sites/configure && incap_res_msg
-	else
-	    return 1
-	fi 1>&2
+api_args="site_ip=$site_ip&domain=${domain}&account_id=${account_id}&send_site_setup_emails=false&force_ssl=true"
+echo Creating site $domain 1>&2
+if incap_api "$api_args" https://my.incapsula.com/api/prov/v1/sites/add
+then
+    site_id=$( incap site id $domain) || return
+	incap_res_msg
+	echo "Setting ignore_ssl to read the incapdns record: "
+	incap_api "site_id=${site_id}&param=ignore_ssl&value=true" api/prov/v1/sites/configure && incap_res_msg
+else
+    return 1
+fi 1>&2
 }
 
 incap_site_rm () {
+
+if [[ x$1 == xhelp ]] ; then
+local help='
+site rm <site id>'
+echo "$help"
+return 
+fi
+
 [[ -z $1 ]] && return 1
 if incap api "site_id=$1" api/prov/v1/sites/delete ; then
 	incap_res_msg 1>&2
@@ -34,9 +50,16 @@ fi
 }
 
 function incap_site_purge () {
-local usage='
-	purge cache <site id>
-	purge hostname <site name>'
+
+if [[ x$1 == xhelp ]] ; then
+local help='
+site purge cache <site id>
+	purge web cache
+site purge hostname <site name>
+	purge hostname cache'
+echo "$help"
+return
+fi
 
 case $1 in
 	cache)
@@ -44,25 +67,35 @@ case $1 in
 		incap_api site_id=$2 api/prov/v1/sites/cache/purge && incap_res_msg
 	;;
 	hostname)
-		echo Purging $3 from hostname cache...
+		echo Purging $2 from hostname cache...
 		incap_api host_name=$2 api/prov/v1/sites/hostname/purge && incap_res_msg
-	;;
-	*)
-		echo Usage: "$usage"
 	;;
 esac 1>&2
 }
 
 function incap_site_ssl () {
-local id=$1
-[[ -z $id ]] || return 1
-incap_api "site_id=${id}&param=domain_validation&value=dns" api/prov/v1/sites/configure 
+
+if [[ x$1 == xhelp ]] ; then
+local help='
+	function <site_id>'
+echo "$help"
+return 
+fi
+
+local site_id=$1
+[[ -n $site_id ]] || return 1
+incap_api "site_id=${site_id}&param=domain_validation&value=dns" api/prov/v1/sites/configure 
 }
 
 
 function incap_site_ip () { 
-local usage='
+
+if [[ x$1 == xhelp ]] ; then
+local help='
 	incap site ip <site_id> <ip|hostname>'
+echo "$help"
+return 
+fi
 
 if [[ -z $2 ]] ; then
 	echo Usage: "$usage" 1>&2
@@ -72,8 +105,8 @@ else
 fi
 	
 local old_ips res
-old_ips=$(incap_site_status $id | jq '.ips')
+old_ips=$(incap_site_status $id | jq -r '.ips')
 incap_api "site_id=$id&param=site_ip&value=$ip" api/prov/v1/sites/configure || return 
 echo $res | 
-	jq --arg old_ips "$old_ips" 'site_id , domain , new_ips: .ips, old_ips: $old_ips}'
+	jq --argjson old_ips "$old_ips" '{site_id , domain , new_ips: .ips, old_ips: $old_ips}'
 } # end function

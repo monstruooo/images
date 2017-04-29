@@ -1,5 +1,15 @@
 #!/bin/bash
 
+function incap_cfg () {
+if [[ -z $incap_api_id ]] ; then
+	read -s -p "API ID: " incap_api_id 
+	echo
+elif [[ -z $incap_api_key ]] ; then
+	read -s -p "API Key: " incap_api_key
+	echo 
+fi
+}
+
 function incap_res_msg () {
 	echo $res | jq .res_message
 }
@@ -7,7 +17,7 @@ function incap_res_msg () {
 function incap_site_id () {
 [[ -z $1 ]] && return 1
 local site_id domain=$1
-mapfile site_id < <(incap cat $domain | jq .site_id )
+mapfile site_id < <(incap cat sites $domain | jq .site_id )
 
 case ${#site_id[@]} in
 	1)
@@ -25,8 +35,10 @@ esac
 } # end function 
 
 function incap_api () {
-local data="$1" api_uri="$2" api_url=https://my.incapsula.com
-api_uri=${api_uri/$api_url\//}  # in case the string contains the whole url path
+local data="$1" api_uri="$2" api_url=https://my.incapsula.com api_args="$*"
+# The next two commands leave only api/<path> from $api_uri to be reattached to $api_url
+api_uri=${api_uri#$api_url} 
+api_uri=${api_uri#/} 			
 local api_history=$(api_history)
 res=$( curl -k -S -s --data "api_id=${incap_api_id}&api_key=${incap_api_key}&${data}" $api_url/$api_uri ) ||
 return 
@@ -34,13 +46,13 @@ return
 res_code=$?
 if ! [[ x$res_code == x0 ]] ; then
 	(( res_code = res_code + 10 ))
-	echo -e " res_code: $res_code \n src: $api_history \n msgs: curl error: $res" | error_red
+	echo -e " res_code: $res_code \n src: $api_history \n args: $api_args \n msgs: curl error: $res" | error_red
 	return $res_code
 fi
 
 if ! echo $res | is_json ; then
 	res_code=2
-	echo -e " res_code: $res_code \n src: $api_history \n msgs: Request failed. Response is not json" | error_red
+	echo -e " res_code: $res_code \n src: $api_history \n args: $api_args \n msgs: Request failed. Response is not json" | error_red
 	echo $res |
 	if echo $res | fgrep -q '</html>' ; then
 		lynx -dump -stdin
@@ -53,7 +65,7 @@ fi
 
 local res_code=$(jq -e .res <<< $res)
 if ! [[ x$res_code == x0 ]] ; then
-	echo -e " res_code: $res_code \n src: $api_history \n msgs: $res" | error_red
+	echo -e " res_code: $res_code \n src: $api_history \n args: $api_args \n msgs: $res" | error_red
 	return $res_code
 fi
 
@@ -75,6 +87,16 @@ done
 
 function incap_updatedb () {
 
+if [[ x$1 == xhelp ]] ; then
+local help='
+<function> <no arguments>
+	With no arguments downloads configuration of all sites
+<function> <site id> <site id> ...
+	Otherwise, only updates sites whose ids are supplied as arguments'
+echo "$help"
+return
+fi
+
 if [[ -n $1 ]] ; then
 	local id
 	for id in $@ ; do
@@ -90,7 +112,6 @@ accounts=$(incap ls accounts |	egrep -o '^[0-9]+')
 rm -f $incap_accounts_dir/account_page-[0-9]*
 accounts=" "$(echo $accounts)" " # echo and spaces to allow removing finished accounts as / $account / /
 accounts2=$accounts
-
 local page= limit=3 page_size=100 exit_code=0
 export page 
 
@@ -188,24 +209,35 @@ while true ; do
 incap_site_status ()
 {
     local incapsula_site_id=$1;
-    incap_api "site_id=${incapsula_site_id}" api/prov/v1/sites/status 2>/dev/zero &&
-	echo $res | jq .
+    incap_api "site_id=${incapsula_site_id}" api/prov/v1/sites/status 2>/dev/zero && echo $res 
 }
 
-
-function incap_cfg () {
-[[ -z $incap_api_id ]] && read -s "API Key: " incap_api_id
-[[ -z $incap_api_key ]] && read -s "API Key: " incap_api_id
-}
 
 function incap_cat () {
 
+if [[ x$1 == xhelp ]] ; then
+local help='
+Can be evoked as
+1. <function> sites
+	Prints jsons of all sites from disk. The jsons are not merged
+2. <function> sites <site id>
+	Prints json of one site from disk
+3. <function> accounts
+	Downloads json of all accounts
+'
+echo "$help"
+return
+fi
+
 if [[ x$1 == xaccounts ]] ; then
-	incap_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list
+	incap_api "page_size=100&page_num=0" https://my.incapsula.com/api/prov/v1/accounts/list && echo $res
 elif [[ x$1 == xsites ]] ; then
-	find $incap_sites_dir -regex '.+_[0-9]+$' -exec cat {} \;
-elif [[ -n $1 ]] ; then
-	incap ls cache sites | egrep -e "/${1}_[0-9]+$" -e "/[^/]+_${1}$" | xargs cat
+	shift 
+	if [[ -z $1 ]] ; then
+		find $incap_sites_dir -regex '.+_[0-9]+$' -exec cat {} \;
+	else
+		incap ls cache sites | egrep -e "/${1}_[0-9]+$" -e "/[^/]+_${1}$" | xargs cat
+	fi
 fi
 
 }
@@ -221,9 +253,9 @@ elif [[ x$1 == xaccounts ]] ; then
 elif [[ x$1 == xsites ]] ; then
 	shift
 	if [[ -n $1 ]] ; then
-		incap cat $1 | incap_site_summary
+		incap cat sites $1 | incap_site_summary
 	else
-		incap cat sites | incap_table_tabs
+		incap cat sites | incap_table
 	fi
 	return
 elif [[ x$1 == xorigins ]] ; then
@@ -237,7 +269,7 @@ elif [[ x$1 == xorigins ]] ; then
 	else
 		{ echo -e "Origin \t Number of Sites" ;
 		incap cat sites | jq -r '.ips[]' | sort | uniq -c | sort -r -n -k 1 | awk '{print $2 " \t " $1}' ; } |
-		tabs2cols
+		tabs2table
 	fi
 	return
 elif [[ x$1 == xcache ]] ; then
@@ -257,8 +289,7 @@ fi
 function incap_ls_accounts () {
 	if [[ -z $1 ]] ; then
 		{ echo '[ "Account ID", "Account Name" ]' ;
-		incap cat accounts &&
-		echo $res |
+		incap cat accounts |
 			jq -r '.accounts | sort_by(.account_name) | .[] |
 			[ .account_id, .account_name ]' ;
 		} | json2table
@@ -281,9 +312,9 @@ jq -r '
 	[ "Cache Mode",		"= " + .performance_configuration.acceleration_level? ],
 	[ "Block URLs",		"= " + 
 			(
-				[ (	.security.acls.rules[] |
+				[ .security.acls.rules[] |
 					select(.id=="api.acl.blacklisted_urls") |
-					.urls[].value ) 
+					.urls[].value 
 				] | join(",")
 			) 
 	],
@@ -294,29 +325,29 @@ jq -r '
 	[ "SSL Validation Status",	"= " + .ssl.generated_certificate.validation_status ],
 	[ "DNS CNAME Record",		"= " +
 		(
-			{ dns:	[ ( .dns[] |
-						select(.set_type_to=="CNAME") ) 
-					] 
-			} |
-			if .[] | length == 1 then 
-				.dns[0].set_data_to | join(",")
+			[ .dns[] | select(.set_type_to=="CNAME") ] |
+			if length == 1 then 
+				.[0].set_data_to[]
 			else 
 				"" 
 			end 
 		) 
 	],
 	[ "DNS A Records",			"= " +
-		( { dns: [(.dns[] | select(.set_type_to=="A"))? ] } |
-		if .[] | length == 1 then 
-			.dns[0].set_data_to | join(",")
-		else 
-			""
-		end ) 
+		( 
+			[ .dns[] | select(.set_type_to=="A") ] |
+			if  length == 1 then 
+				.[0].set_data_to | join(",")
+			else 
+				""
+			end 
+		) 
 	]
 ] ' | jq .[] | json2table
 }
 
-function incap_table_tabs () {
+function incap_table () {
+# tabs2table is faster than json2table
 { echo -e "Site Id \t Site Name \t Account \t IPs \t CNAME" ;
 
 /bin/cat /dev/stdin |
@@ -327,37 +358,17 @@ jq -j '
 	" \t ",
 .account_id,
 	" \t ",
-(.ips|join(",") | .[0:44] ),
+(.ips|join(",") | .[0:44]),
 	" \t ",
 ( 
-	{ dns: [ (.dns[]|select(.set_type_to=="CNAME"))? ] } |
-	if .[]|length==1 then 
-		.dns[0].set_data_to|join(",")
+	[ .dns[]|select(.set_type_to=="CNAME") ] |
+	if length==1 then 
+		.[0].set_data_to[]
 	else 
 		"N/A"
 	end 
-),	"\n"' ; } | tabs2cols
-}
-
-function incap_table () {
-{ echo '[ "Site Id", "Site Name", "Account", "IPs", "CNAME" ]' ;
-
-/bin/cat /dev/stdin |
-jq -r '
-[ 
-	.site_id,
-	.domain ,
-	.account_id,
-	(.ips|join(",") | .[0:44] ),
-	( 
-		{ dns: [ (.dns[]|select(.set_type_to=="CNAME"))? ] } |
-		if .[]|length==1 then 
-			.dns[0].set_data_to|join(",")
-		else 
-			"N/A"
-		end 
-	) 
-]' ; } | json2table
+),
+	"\n"' ; } | tabs2table
 }
 
 function incap () {
@@ -377,6 +388,9 @@ case x$action in
 		shift
 		incap_site_${action} "$@"
 		# incap site ip 12345 1.2.3.4 -> incap_site_ip 12345 1.2.3.4
+		;;
+	x)
+		return
 		;;
 	*)
 		incap_${action} "$@"
