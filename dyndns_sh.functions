@@ -42,15 +42,30 @@ function dyn_cfg () {
 }
 
 function dyn_token_get () {
-if [[ -n $dyn_token ]] ; then
-	(( $(date +%s) - ${dyn_token_ts:-0} < 300 )) && return 0
-	dyn_token_revive && { export dyn_token_ts=$(date +%s) ; return 0 ; }
+
+if [[ -n $dyn_token ]] && (( $(date +%s) - ${dyn_token_ts:-0} < 300 )) ; then
+	local info="Nothing to do"
+	return 0
+else
+	dyn token kill
 fi
-local data=$( jq -n '.customer_name="'$dyn_customer'" |
-.user_name="'${dyn_user}'" | 
-.password="'${dyn_pwd}'"' )
+
+local data=$( jq -n '{ 
+	"customer_name":	"'$dyn_customer'",
+	"user_name":		"'${dyn_user}'",
+	"password":			"'${dyn_pwd}'" 
+}')
+
 res=$(curl -Ss -H content-type:application/json --data "$data" -X POST $dyn_api/REST/Session)
-dyn_token=$( echo $res | jq -e -r .data.token ) && export dyn_token dyn_token_ts=$(date +%s) 
+# res=$(w3m -header content-type:application/json -post <(echo "$data") -dump_source $dyn_api/REST/Session) 
+#res=$(http POST $dyn_api/REST/Session content-type:application/json user_name=$dyn_user customer_name=$dyn_customer password=$dyn_pwd )
+if dyn_token=$( echo $res | jq -e -r .data.token ) ; then
+	export dyn_token dyn_token_ts=$(date +%s) 
+	echo new token $(api_history) | info_green | 1>&2
+	return 0
+else
+	return 1
+fi
 # function returns error if jq fails
 }
 
@@ -59,7 +74,9 @@ function dyn_token_kill () {
 [[ -n $dyn_token ]] || return
 local res
 curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token -X DELETE $dyn_api/REST/Session >/dev/zero
-unset dyn_token 	
+# Testing X-HTTP-Method-Override:DELETE. Can't get it work
+# w3m -header content-type:application/json -header Auth-Token:$dyn_token -header X-HTTP-Method-Override:DELETE -dump_source $dyn_api/REST/Session
+unset dyn_token dyn_token_ts
 }
 
 function dyn_token_revive () {
@@ -69,36 +86,48 @@ jq -e -r .status 2>/dev/zero | egrep -q success
 }
 
 function dyn_api () {
-dyn_token_get
-local exit_code args msgs
-args=$(echo $* | jq -R .)
-res=$( curl -Ss -H content-type:application/json -H Auth-Token:\ $dyn_token "$@" 2>&1)
-exit_code=$?
-if [[ x$exit_code != x0 ]] ; then
-	(( exit_code = exit_code + 10 ))
-	msgs=$(echo $res | jq -R .)
-	jq -n '{ function: "'$FUNCNAME[0]'" ,args: '$args', msgs: '$msgs' }' | egrep --color '.*' 1>&2
-	return $exit_code
+local exit_code api_args src msgs
+dyn token get
+api_args="$*"
+api_history=$(api_history)
+res_info="src: $api_history \n args: $api_args"
+
+# curl -S -s stops printing errors. The order matters
+res=$( curl -s -S -m 33 -H content-type:application/json -H Auth-Token:\ $dyn_token "$@" 2>&1)
+res_code=$?
+if [[ x$res_code != x0 ]] ; then
+	(( res_code = res_code + 10 ))
+	echo -e " res_code: $res_code \n $res_info \n curl_error: $res" | error_red
+	return $res_code
 fi	
 # set +x ; echo 
 # login: There was a problem with your credentials
 
 if ! echo $res | is_json ; then
-	if echo $res | fgrep -q '<html>' ; then
-		res=$(echo $res | lynx -dump --stdin 2>/dev/zero || echo $res )
-	fi
-	echo $res | egrep --color '.*' 1>&2
-	return 2
+	res_code=2
+	echo -e " res_code: $res_code \n $res_info \n info: not json format" | error_red
+	if echo $res | fgrep -i -q '<html>' ; then
+		echo $res | lynx -dump --stdin 
+	else
+		echo $res
+	fi | error_red
+	return $res_code
 fi
 
 local debug="
 $(echo $res | jq .)" # for debugging purposes
 
+# If we got that far, that means that the request has reached API and the token was renewed
+dyn_token_ts=$(date +%s)
+
 if echo $res | jq -e -r .status 2>/dev/zero | egrep -q success ; then	
-	return 0
+	res_code=0
+	return $res_code
 else
-	echo $res | dyn_msg | jq -e ".args=$args" | egrep --color '.*' 1>&2
-	return 1
+	res_code=1
+	echo -e " res_code: $res_code \n $res_info" | error_red
+	echo "$res" | jq . | error_red
+	return $res_code
 fi
 
 }
@@ -121,20 +150,17 @@ fi && echo $res | dyn_msg 1>&2
 }
 
 dyn_domain_ls () {
-local dyn_token
 if [[ -z $1 ]] ; then
 	dyn_api $dyn_api/REST/Zone/ 
 	echo $res | jq -r .data[] | cut -d/ -f4
-	dyn_token_kill
 	return
 fi
 
 local domain=$1 id name type
-
+dyn_api $dyn_api/REST/AllRecord/$domain/ || return
+echo $res |
 { echo -e "Id \t Name \t Type" ;
-dyn_api $dyn_api/REST/AllRecord/$domain/ 
-dyn token kill
-echo $res | jq '{data}' |
+# echo $res | 
 jq -r .data[] |
 cut -d / --output-delimiter=\  -f 3,5,6 |
 while read type name id ; do
@@ -188,18 +214,18 @@ domain=$1
 shift
 
 
-local domain_ls=$(dyn_domain_ls $domain) ids 
-ids=$( echo "$domain_ls" |
+local domain_ls=$( dyn domain ls $domain | 
 if [[ $1 == all ]] ; then
-	egrep -o '^[0-9]+'
+	egrep '^[0-9]+'
+elif [[ $1 == naked ]] ; then
+	awk '{ if ( $2 == "@" )  print; }'
 else 
-	egrep "$1" | egrep -o '^[0-9]+'
-fi)
+	ids=$( echo $* | tr ' ' '|') # --> id1|id2|id3
+	egrep "^($ids)\s" 
+fi )
 
-local id name type cache
-for id in $ids ; do
-	local name type
-	read id name type < <(echo "$domain_ls" | awk '{if ($1 == "'$id'" ) print }')
+local id name type req_total=$(echo "$domain_ls"| wc -l)
+while read id name type ; do
 	[[ -z $name ]] && continue 
 	[[ $name == @ ]] && name=$domain || name=${name}.$domain
 
@@ -212,25 +238,32 @@ for id in $ids ; do
 	fi
 
 	( 
-	dyn debug start background subshell 
-	unset dyn_token # Every background request should have its own token/session to avoid rate limit
-	dyn_api https://api.dynect.net/REST/${type}Record/${domain}/${name}/${id} && echo $res > $cache
-	dyn token kill
-	dyn debug end subshell
-	)& 
-	while (( $(jobs -n | wc -l ) > 22 )) ; do 
-		sleep .1
-	done
-done | cat
-wait
+		local dyn_token dyn_token_ts ;
+		dyn token get ; 
+		dyn_api https://api.dynect.net/REST/${type}Record/${domain}/${name}/${id} &&
+		echo $res > $cache
+		dyn token kill
+	)&
+	#  w3m can do POST and GET requests with no curl overload
+	# ( local dyn_token dyn_token_ts ; dyn token get ; res=$(w3m -header content-type:application/json -header Auth-Token:$dyn_token -dump_source https://api.dynect.net/REST/${type}Record/${domain}/${name}/${id}) && echo $res > $cache ; dyn token kill )&
+
+	((count++))
+	if (( count % 50 == 0 || count == req_total )) ; then
+		wait
+	fi
+done < <(echo "$domain_ls") | cat # cat is to hide background tasks
+#echo "$domain_ls"
 { echo -e "Id \t Name \t Type \t TTL \t Rdata \t Target/Value" ;
+local ids=$(echo "$domain_ls" | egrep -o '^[0-9]+') ;
 for id in $ids ; do
 	cache=$dyn_domains_dir/${domain}.$id
-	jq -e . $cache || return
+	cat $cache 
+	#jq -e . $cache || return
 done | dyn_record2table ; } | tabs2table
 }
 
 function dyn_ls () {
+local dyn_token dyn_token_ts
 if [[ -n $2 ]] ; then
 	dyn_record_ls $@
 elif [[ $1 == cache ]] ; then
@@ -238,6 +271,7 @@ elif [[ $1 == cache ]] ; then
 else
 	dyn_domain_ls $@
 fi
+dyn token kill
 }
 
 function dyn_debug () {
@@ -249,6 +283,8 @@ function dyn_tmpfile () {
 }
 
 function dyn () {
+
+[[ -z $dyn_pid ]] && export dyn_pid=$BASHPID 
 
 # export dyn_debug=off
 # export dyn_use_cache=on

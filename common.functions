@@ -16,7 +16,7 @@ cat /dev/stdin | egrep --color '.*'
 }
 
 function api_history () {
-	echo ${FUNCNAME[*]} | cut -d \  -f 2-11
+	echo ${FUNCNAME[*]:1:11}
 }
 
 function error_red () {

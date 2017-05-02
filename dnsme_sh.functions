@@ -25,30 +25,32 @@ api_uri=${api_uri#*dnsmadeeasy.com/} # backward compatibility for calls that use
 
 local src args msgs
 args=$(echo $api_uri $*)
-src=$(api_history)
-if ! res=$(curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $api_url/$api_uri "$@" 2>&1 )
-then
-	exit_code=$(( $? + 10 ))
-	echo -e " res code: $exit_code \n src: $src \n args: $args \n msgs: Curl failed: $res"  | error_red
-	return $exit_code
+api_history=$(api_history)
+res=$(curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $api_url/$api_uri "$@" 2>&1 )
+res_code=$?
+if ! [[ x$res_code == x0 ]] ; then
+	res_code=$(( $? + 10 ))
+	echo -e " res code: $res_code \n src: $api_history \n args: $args \n msgs: Curl failed: $res"  | error_red
+	return $res_code
 fi
 
 if [[ -z $res ]] ; then
 	res=$(echo -e " src: $src \n msgs: Sucess. No curl output" )
-	return 0
+	return $res_code
 fi
 
 # For some reason dnsme returns errors as jq filter instead of json	
 if jq -n -e "$(echo $res | cut -c 1-333) | .error"  >/dev/zero 2>&1 ; then
 local logic='
 	Reconstructing error can save you a lot of time troubleshooting'
-	echo -e " res code: 1 \n src: $src \n args: $args \n msgs: $res" | error_red
-	return 1
+	res_code=1
+	echo -e " res code: $res_code \n src: $api_history \n args: $args \n msgs: $res" | error_red
+	return $res_code
 fi
 
 if ! echo $res | is_json ; then
 	res_code=2
-	echo -e "res_code: $res_code \n src: $src \n args: $args \n msgs: Request failed. Response is not json" | error_red
+	echo -e "res_code: $res_code \n src: $api_history \n args: $args \n msgs: Request failed. Response is not json" | error_red
     echo $res | 
 	if echo $res | fgrep -q '</html>' ; then
 		 lynx -dump --stdin 1>&2
@@ -114,7 +116,7 @@ egrep '^>' | awk '{print $2}' | xargs -L 1 /bin/rm -fv
 function dnsme_cfg () {
 [[ x$1 == set ]] && unset dnsme_api_key dnsme_secret_key
 [[ -z $dnsme_api_key ]] && read -p 'API Key: ' dnsme_api_key
-[[ -z $dnsme_secret_key ]] && read -s -p 'API Secret Key: ' dnsme_secret_key
+[[ -z $dnsme_secret_key ]] && read -s -p 'API Secret Key: ' dnsme_secret_key && echo
 } # end function dnsme_configure
 
 function dnsme_url () {
@@ -220,6 +222,9 @@ case x$action in
 		dnsme_$action "$@" 
 		# dnsme ls cache -> dnsme_ls_cache
 		# dnsme domain rm 12345 -> dnsme_domain_rm 12345
+	;;
+	x)
+		return
 	;;
 	*)
 		dnsme_$action "$@" 

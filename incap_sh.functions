@@ -40,10 +40,11 @@ local data="$1" api_uri="$2" api_url=https://my.incapsula.com api_args="$*"
 api_uri=${api_uri#$api_url} 
 api_uri=${api_uri#/} 			
 local api_history=$(api_history)
-res=$( curl -k -S -s --data "api_id=${incap_api_id}&api_key=${incap_api_key}&${data}" $api_url/$api_uri ) ||
-return 
 
+res=$( curl -k -s -S --data "api_id=${incap_api_id}&api_key=${incap_api_key}&${data}" $api_url/$api_uri )
+# res=$( echo "api_id=${incap_api_id}&api_key=${incap_api_key}&${data}" | lynx -post-data -dump $api_url/$api_uri )
 res_code=$?
+
 if ! [[ x$res_code == x0 ]] ; then
 	(( res_code = res_code + 10 ))
 	echo -e " res_code: $res_code \n src: $api_history \n args: $api_args \n msgs: curl error: $res" | error_red

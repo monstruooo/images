@@ -5,26 +5,31 @@ function dyn_domain_mk () {
 local data=$( jq -c --arg rname $rname --arg ttl $ttl -n '{$rname, ttl: $ttl|tonumber }' )
 dyn_debug '
 	Output: {"rname":"dnsadmin.spotoption.com","ttl":1800}'
-dyn_api -X POST --data "$data" $dyn_api/REST/Zone/$domain/ 
-
+dyn_api -X POST --data "$data" $dyn_api/REST/Zone/$domain/ || return
 dyn publish zone $domain
+}
+
+function dyn_domain_rm () {
+[[ -n $1 ]] && local domain=$1 || return 1
+read -n 1 -p "Press Y/y to delete domain $domain: " ; read_nl
+if [[ x$REPLY == x[Yy] ]] ; then
+	dyn_api -X DELETE  $dyn_api/REST/Zone/$domain/ &&
+	echo $res | dyn_msg
+fi
 }
 
 function dyn_rm () {
 [[ -n $1 ]] && local domain=$1 || return 1
 shift 
-if [[ -z $1 ]] ; then
-	read -n 1 -p "Press Y/y to delete domain $domain: " ; read_nl
-	if [[ x$REPLY == x[Yy] ]] ; then
-		dyn_api -X DELETE  $dyn_api/REST/Zone/$domain/ 
-	fi
-	return
-fi
-local id ids fqdn name type
+local id ids fqdn name type domain_ls
 ids=$*
+domain_ls=$(dyn_domain_ls $domain)
 for id in $ids ; do
-	read id name type < <(dyn_domain_ls $domain | egrep "^$id\s")
-	[[ -z $name ]] && continue
+	read id name type < <(echo "$domain_ls" | egrep "^$id\s")
+	if [[ -z $name ]] ; then
+		echo Id $id not found | error_red
+		continue
+	fi
 	[[ $name == @ ]] && fqdn=$domain || fqdn=${name}.$domain
 	dyn_api -X DELETE https://api.dynect.net/REST/${type}Record/${domain}/$fqdn/$id 
 done
