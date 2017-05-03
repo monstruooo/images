@@ -107,7 +107,9 @@ if [[ x$fqdn == x$domain ]] ; then
 fi
 
 dyn_debug 'Checking if record already exists and has id'
-id=$(dyn ls $domain | egrep "\s${name//./\\.}\s+$type\b" | egrep -o ^[0-9]+)
+id=$(dyn ls $domain | 
+	awk '{ if ( $2=="'$name'" && $3 == "'$type'" ) print ;}' | 
+	egrep -o ^[0-9]+)
 if [[ x$id =~ ^x[0-9]+$ ]] ; then
 	dyn_debug 'One record exists. Updating'
 	dyn_api -X PUT --data "$data" $dyn_api/REST/${type}Record/$domain/$fqdn/$id
