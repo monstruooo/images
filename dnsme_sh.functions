@@ -19,14 +19,14 @@ hmac_H="x-dnsme-hmac:$hmac"
 req_date_H="x-dnsme-requestDate:$request_date"
 content_type_H="content-type:application/json"
 accept_type_H="accept:application/json"
-local api_uri=$1
+local url=$1
 shift
-api_uri=${api_uri#*dnsmadeeasy.com/} # backward compatibility for calls that use full url instead of uri
+url=$api_url/${url#*dnsmadeeasy.com/} # backward compatibility for calls that use full url instead of uri
 
 local src args msgs
-args=$(echo $api_uri $*)
+args=$(echo $url $*)
 api_history=$(api_history)
-res=$(curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $api_url/$api_uri "$@" 2>&1 )
+res=$(curl -k -s -S -H "$api_key_H" -H "$hmac_H" -H "$req_date_H" -H "$content_type_H" -H "$accept_type_H" $url "$@" 2>&1 )
 res_code=$?
 if ! [[ x$res_code == x0 ]] ; then
 	res_code=$(( $? + 10 ))

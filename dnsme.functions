@@ -3,8 +3,10 @@
 function dnsme_mk () {
 local domain domain_id serial id name type value ttl json data
 local api_history=$(api_history)
+domain=$1
+shift
 args2vars "$@"
-if [[ -z $type ]] ; then 
+if [[ -z $1 ]] ; then 
 	data=$( jq -n "{ name: \"$domain\" }")
     dnsme_api V2.0/dns/managed/ -X POST -d "$data" 
 	return
@@ -17,8 +19,6 @@ domain=$(echo $res | jq -r .name)
 data=$(args2json "$@")
 data=$( echo "$data" | jq 'if .name=="@" then .name="" else . end')
 name=${name/@/}
-
-data=$( jq -n "$data | del(.domain)")
 
 if [[ -z $ttl ]] ; then
 	ttl=1800
