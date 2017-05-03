@@ -1,0 +1,173 @@
+#!/bin/bash
+
+function tabs2table() {
+cat /dev/stdin | column -x -t -s $'\t'
+}
+
+function read_nl () { 
+readme='add new line to read -n 1 unless Enter pressed (which adds new line)'
+[[ -z $REPLY ]] || echo
+}
+
+function info_green () {
+local GREP_COLOR
+export GREP_COLOR="01;32"
+cat /dev/stdin | egrep --color '.*'
+}
+
+function api_history () {
+	echo ${FUNCNAME[*]:1:11}
+}
+
+function error_red () {
+local GREP_COLOR
+export GREP_COLOR="01;31"
+cat /dev/stdin | egrep --color '.*' 1>&2
+}
+
+function prn_col () {
+        local next
+        for next in $* ; do
+                echo $next
+        done
+} 
+
+function wk () {
+local usage=<<'EOF'
+ls -l | wk '$1,$3' 
+EOF
+	cat /dev/stdin | awk '{print '"$*"'}'
+} # end function
+
+json2bash () {
+# select((.[1]|type)!="null" and (.[1]|type)!="array") | 
+jq  -r -c --stream '
+	if has(1) then . else empty end |
+	[[ .[0][] | if .|type=="number" then . | tostring else . end ],.[1]] |
+	(.[0]|join(" "))
+	+ "\t = "
+	+ (.[1]|tostring)
+	' /dev/stdin | # jq end - pipe continues
+	tabs2table
+}
+
+function json2fs () {
+# cat  < <(  json_to_fs $testdir/ "$json" ) to hide info about bg processes
+local key keys dir=$1 json="$2" value ptype type
+if [[ -z $json ]] ; then
+	json=$(/bin/cat /dev/stdin)
+fi
+mkdir -p "$dir"
+ptype=$(echo $json| jq -r type)
+# jq sorts keys itself'
+keys=$(echo "$json" | jq 'keys[]' 2>/dev/zero) || return 0
+for key in $keys ; do
+    case $ptype in
+		array)
+		value=$(echo $json | jq .[$key])
+		;;
+		*)	
+		value=$(echo $json | jq .$key)
+		;;
+	esac
+	key=$( echo $key | jq -r . )
+	type=$(echo $value | jq -r type 2>/dev/zero) || continue
+	case $type in
+		array)
+		json_to_fs "$dir/${key}[]" "$value" &
+		echo "$json" >  "$dir"/.json
+		;;
+		object)
+		json_to_fs "$dir/${key}" "$value" &
+		echo "$json" >  "$dir"/.json
+		;;
+		*)
+		(( i <= 0 )) && continue	
+		/bin/echo "$value" > $dir/"$key" &
+		;;
+	esac
+done 
+wait
+((i--))
+}
+
+function json2vars () {
+local keys json="$1"
+keys=$(echo $json | jq -r keys[]);
+for key in $keys ; do
+    value=$(echo $json | jq .$key)
+	export $key=$value
+done
+
+}
+
+function arr2json () {
+readme="
+    Converts bash array to json.
+    Expects array name as the first argument
+    Array should be passed as a list of items separated by newlines
+    Array argument should be quoted"
+local arrname=$1 array
+shift
+array="$@"
+jq -n --arg array "$array" {${arrname}': $array  | split("\n")}'
+}
+
+function is_json () {
+/bin/cat /dev/stdin | jq -e -r type 2>/dev/zero | egrep -q '[a-z]+' 2>/dev/zero
+}
+
+function jqres () {
+local json=$(args2json "$@")
+jq -n "$json | { res: . }"
+}
+
+function args2vars () {
+local arg key
+for arg in "$@" ; do
+	[[ "$arg" =~ = ]] || continue
+	key=${arg%%=*}
+	arg="${arg#*=}"
+	export $key="$arg"
+done
+
+} # end function
+
+function json2table () {
+cat /dev/stdin |
+jq -j '[ to_entries| .[].value|tostring ] |
+	join (" \t "), "\n"' |
+tabs2table
+}
+
+function to_array () {
+local arg
+for arg in "$@" ; do
+	echo "$arg" |
+	jq . 2>/dev/zero || echo "$arg" | jq -R .
+done | 
+jq -s -c .
+}
+
+function args2json () {
+local usage='
+	This function accepts arguments as domain=oskar-test.com id=12 etc
+	It automatically identifies the json type of value. Basically its only quoting strings.
+	If unsure, embed quotes thru escaping them as name=\"123\".
+	Empty arguments like name= for dnsme naked records are assumed to be empty strings. Its the same as name=\"\" '
+
+local key value arg json
+json='{}'
+for arg in "$@" ; do
+	[[ "$arg" =~ = ]] || continue
+	key=${arg%%=*}
+	value="${arg#*=}"
+
+	local next='
+		jq throws error if string is unquoted. jq -R surrounds it with quotes
+		jq does not return error on empty echo. So grep on jq type '
+	echo "$value" | jq -e type 2>/dev/zero | egrep -q '[a-z]' || value=$(echo $value | jq -R .)
+	json=$( jq -n "$json | .$key=$value")
+done  
+echo $json | jq -c .
+} # end function
