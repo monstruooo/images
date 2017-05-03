@@ -114,7 +114,7 @@ egrep '^>' | awk '{print $2}' | xargs -L 1 /bin/rm -fv
 }
 
 function dnsme_cfg () {
-[[ x$1 == set ]] && unset dnsme_api_key dnsme_secret_key
+[[ x$1 == xreset ]] && unset dnsme_api_key dnsme_secret_key
 [[ -z $dnsme_api_key ]] && read -p 'API Key: ' dnsme_api_key
 [[ -z $dnsme_secret_key ]] && read -s -p 'API Secret Key: ' dnsme_secret_key && echo
 } # end function dnsme_configure
